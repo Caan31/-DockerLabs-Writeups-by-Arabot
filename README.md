@@ -142,7 +142,7 @@ Maquinas_DockerLabs/
 ## 🗺️ ¿Por dónde empiezo si soy principiante?
 
 ```
-1. Instala DockerLabs → https://dockerlabs.es/
+1. Ve a DockerLabs → 🐋 https://dockerlabs.es 
 2. Empieza con TRUST o VACACIONES (Muy Fácil)
 3. Lee el writeup DESPUÉS de intentarlo tú solo
 4. Pasa a Fácil cuando ya no te atasques en las básicas
