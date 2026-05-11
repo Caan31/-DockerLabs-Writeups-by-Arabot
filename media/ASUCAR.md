@@ -1,6 +1,6 @@
 # Asucar — DockerLabs
 
-**Plataforma:** The Hackers Labs  
+**Plataforma:** DockerLabs  
 **Dificultad:** 🟡 Medio  
 **SO:** Linux  
 **Autor de la máquina:** The Hackers Labs  
