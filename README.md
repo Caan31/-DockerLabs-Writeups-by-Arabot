@@ -10,7 +10,7 @@
 [![Media](https://img.shields.io/badge/Media-13-ff9900?style=flat-square)](#-media)
 [![Autor](https://img.shields.io/badge/Autor-Arabot-ff6b35?style=flat-square&logo=github&logoColor=white)](https://github.com/Caan31)
 
-> *"No busco llegar solo — documento cada paso para que tú también puedas."*
+> *"Documento cada paso para ayudarte."*
 
 </div>
 
